@@ -2,21 +2,20 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<base href="/localai-lab/">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LocalAI Lab — Practical Guides for Self-Hosted AI</title>
 <meta name="description" content="Hands-on guides for running LLMs, diffusion models, and AI tools on your own hardware. From Ollama to vLLM, ComfyUI to RAG — real terminal output, no fluff.">
-<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/localai-lab/assets/style.css">
 </head>
 <body>
 <header class="header">
   <div class="container header-inner">
-    <a href="/" class="logo">~/localai-lab</a>
+    <a href="/localai-lab/" class="logo">~/localai-lab</a>
     <nav class="nav">
-      <a href="/guides/">Guides</a>
-      <a href="/tools/">Tools</a>
-      <a href="/newsletter/">Newsletter</a>
-      <a href="https://github.com/localai-lab" target="_blank">GitHub</a>
+      <a href="/localai-lab/guides/">Guides</a>
+      <a href="/localai-lab/tools/">Tools</a>
+      <a href="/localai-lab/newsletter/">Newsletter</a>
+      <a href="https://github.com/LazyCat00X/localai-lab" target="_blank">GitHub</a>
     </nav>
   </div>
 </header>
@@ -25,8 +24,8 @@
   <div class="container">
     <h1>Run AI on Your Own Hardware</h1>
     <p>No-nonsense, hands-on guides for deploying and using LLMs, diffusion models, and AI tools locally. Every guide comes with real terminal output — because theory is useless without working code.</p>
-    <a href="/guides/" class="btn btn-primary">Browse Guides →</a>
-    <a href="/newsletter/" class="btn btn-outline">Get Updates</a>
+    <a href="/localai-lab/guides/" class="btn btn-primary">Browse Guides →</a>
+    <a href="/localai-lab/newsletter/" class="btn btn-outline">Get Updates</a>
     <div class="hero-stats">
       <div class="stat">
         <div class="stat-value" id="guide-count">12</div>
@@ -59,31 +58,31 @@
     <h2 class="section-title">Tools We Cover</h2>
     <p class="section-subtitle">From model runners to serving frameworks.</p>
     <div class="tools-grid">
-      <a href="/guides/ollama-complete-guide/" class="tool-item">
+      <a href="/localai-lab/guides/ollama-complete-guide/" class="tool-item">
         <div class="tool-icon" style="background:rgba(56,189,248,0.15);color:#38bdf8;">Ol</div>
         <div><h4>Ollama</h4><span>Local model runner</span></div>
       </a>
-      <a href="/guides/vllm-setup-guide/" class="tool-item">
+      <a href="/localai-lab/guides/vllm-setup-guide/" class="tool-item">
         <div class="tool-icon" style="background:rgba(167,139,250,0.15);color:#a78bfa;">vL</div>
         <div><h4>vLLM</h4><span>High-throughput serving</span></div>
       </a>
-      <a href="/guides/llamacpp-deep-dive/" class="tool-item">
+      <a href="/localai-lab/guides/llamacpp-deep-dive/" class="tool-item">
         <div class="tool-icon" style="background:rgba(52,211,153,0.15);color:#34d399;">lc</div>
         <div><h4>llama.cpp</h4><span>GGUF quantization</span></div>
       </a>
-      <a href="/guides/comfyui-for-programmers/" class="tool-item">
+      <a href="/localai-lab/guides/comfyui-for-programmers/" class="tool-item">
         <div class="tool-icon" style="background:rgba(251,146,60,0.15);color:#fb923c;">CF</div>
         <div><h4>ComfyUI</h4><span>Headless automation</span></div>
       </a>
-      <a href="/guides/build-local-rag/" class="tool-item">
+      <a href="/localai-lab/guides/build-local-rag/" class="tool-item">
         <div class="tool-icon" style="background:rgba(236,72,153,0.15);color:#f472b6;">RG</div>
         <div><h4>RAG Pipeline</h4><span>Ollama + ChromaDB</span></div>
       </a>
-      <a href="/guides/huggingface-model-discovery/" class="tool-item">
+      <a href="/localai-lab/guides/huggingface-model-discovery/" class="tool-item">
         <div class="tool-icon" style="background:rgba(250,204,21,0.15);color:#fbbf24;">HF</div>
         <div><h4>HuggingFace</h4><span>Model discovery</span></div>
       </a>
-      <a href="/tools/" class="tool-item">
+      <a href="/localai-lab/tools/" class="tool-item">
         <div class="tool-icon" style="background:rgba(148,163,184,0.15);color:#94a3b8;">+</div>
         <div><h4>All Tools</h4><span>Browse the full list</span></div>
       </a>
@@ -114,17 +113,17 @@
   <div class="container footer-inner">
     <span>&copy; 2026 LocalAI Lab. Built with <a href="https://hermes-agent.nousresearch.com" style="color:var(--accent);text-decoration:none;">Hermes Agent</a>.</span>
     <div class="footer-links">
-      <a href="/guides/">Guides</a>
-      <a href="/tools/">Tools</a>
-      <a href="/newsletter/">Newsletter</a>
-      <a href="https://github.com/localai-lab" target="_blank">GitHub</a>
+      <a href="/localai-lab/guides/">Guides</a>
+      <a href="/localai-lab/tools/">Tools</a>
+      <a href="/localai-lab/newsletter/">Newsletter</a>
+      <a href="https://github.com/LazyCat00X/localai-lab" target="_blank">GitHub</a>
     </div>
   </div>
 </footer>
 
 <script>
 // Load guides from JSON
-fetch('/guides/index.json')
+fetch('/localai-lab/guides/index.json')
   .then(r => r.json())
   .then(guides => {
     const grid = document.getElementById('guide-grid');
@@ -144,7 +143,7 @@ fetch('/guides/index.json')
 function subscribeNewsletter() {
   const email = document.getElementById('newsletter-email').value;
   if (!email || !email.includes('@')) return;
-  fetch('/api/subscribe', {
+  fetch('/localai-lab/api/subscribe', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({email})

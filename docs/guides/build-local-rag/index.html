@@ -2,20 +2,19 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<base href="/localai-lab/">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Build a Local RAG System — LocalAI Lab</title>
 <meta name="description" content="End-to-end RAG pipeline with Ollama, ChromaDB, LangChain. Document ingestion, chunking strategies, and hybrid search.">
-<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/localai-lab/assets/style.css">
 </head>
 <body>
 <header class="header">
   <div class="container header-inner">
-    <a href="/" class="logo">~/localai-lab</a>
+    <a href="/localai-lab/" class="logo">~/localai-lab</a>
     <nav class="nav">
-      <a href="/guides/">Guides</a>
-      <a href="/tools/">Tools</a>
-      <a href="/newsletter/">Newsletter</a>
+      <a href="/localai-lab/guides/">Guides</a>
+      <a href="/localai-lab/tools/">Tools</a>
+      <a href="/localai-lab/newsletter/">Newsletter</a>
     </nav>
   </div>
 </header>
@@ -703,7 +702,7 @@ def retrieve_with_rerank(query: str, k: int = 5,
           <li><strong>Hybrid search with BM25</strong>: integrate Tantivy or the <code>rank_bm25</code> package to add keyword-based retrieval alongside semantic search for better exact-match performance.</li>
           <li><strong>ChromaDB to Postgres with pgvector</strong>: if your knowledge base grows beyond 100K documents, migrate to Postgres with pgvector for ACID compliance, concurrent access, and full-text + vector hybrid queries.</li>
         </ul>
-        <p>If you found this guide useful, <a href="/newsletter/">subscribe to the LocalAI Lab newsletter</a> for new guides on local AI infrastructure, RAG evaluation, and production deployment patterns.</p>
+        <p>If you found this guide useful, <a href="/localai-lab/newsletter/">subscribe to the LocalAI Lab newsletter</a> for new guides on local AI infrastructure, RAG evaluation, and production deployment patterns.</p>
       </section>
 
     </div>
@@ -713,8 +712,8 @@ def retrieve_with_rerank(query: str, k: int = 5,
   <div class="container footer-inner">
     <span>&copy; 2026 LocalAI Lab.</span>
     <div class="footer-links">
-      <a href="/guides/">Guides</a>
-      <a href="/newsletter/">Newsletter</a>
+      <a href="/localai-lab/guides/">Guides</a>
+      <a href="/localai-lab/newsletter/">Newsletter</a>
     </div>
   </div>
 </footer>
