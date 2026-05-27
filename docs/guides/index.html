@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>All Guides — LocalAI Lab</title>
+<meta name="description" content="All LocalAI Lab guides — from Ollama to vLLM, RAG to ComfyUI.">
+<link rel="stylesheet" href="/localai-lab/assets/style.css">
+</head>
+<body>
+<header class="header">
+  <div class="container header-inner">
+    <a href="/localai-lab/" class="logo">~/localai-lab</a>
+    <nav class="nav">
+      <a href="/localai-lab/guides/">Guides</a>
+      <a href="/localai-lab/tools/">Tools</a>
+      <a href="/localai-lab/newsletter/">Newsletter</a>
+      <a href="https://github.com/LazyCat00X/localai-lab" target="_blank">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<section class="featured-section" style="padding-top:60px;">
+  <div class="container">
+    <h1 style="font-size:2rem;margin-bottom:12px;">All Guides</h1>
+    <p style="color:var(--text-secondary);margin-bottom:40px;">Step-by-step, tested, and ready to run on your machine.</p>
+    <div class="guide-grid" id="guide-grid">
+      <!-- Loaded from index.json -->
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <span>&copy; 2026 LocalAI Lab.</span>
+    <div class="footer-links">
+      <a href="/localai-lab/guides/">Guides</a>
+      <a href="/localai-lab/newsletter/">Newsletter</a>
+      <a href="https://github.com/LazyCat00X/localai-lab" target="_blank">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+fetch('/localai-lab/guides/index.json')
+  .then(r => r.json())
+  .then(guides => {
+    const grid = document.getElementById('guide-grid');
+    grid.innerHTML = guides.map(g => `
+      <div class="guide-card">
+        <span class="tag tag-${g.level}">${g.level}</span>
+        <h3>${g.title}</h3>
+        <p>${g.description}</p>
+        <div class="meta">
+          <span>${g.readTime} min read</span>
+          <a href="${g.url}" class="read-more">Read Guide →</a>
+        </div>
+      </div>
+    `).join('');
+  });
+</script>
+</body>
+</html>
