@@ -1,0 +1,86 @@
+[
+  {
+    "title": "Ollama: The Complete Guide",
+    "description": "From installation to custom Modelfiles, multi-model management, OpenAI-compatible API, and production tips. Every command tested on a real Linux machine.",
+    "level": "beginner",
+    "readTime": 15,
+    "url": "/guides/ollama-complete-guide/"
+  },
+  {
+    "title": "Run LLMs Locally on Linux",
+    "description": "Hardware requirements, quantization levels explained, inference engine comparison (Ollama vs llama.cpp vs vLLM), and GPU acceleration setup.",
+    "level": "beginner",
+    "readTime": 12,
+    "url": "/guides/local-llm-linux/"
+  },
+  {
+    "title": "vLLM Setup Guide",
+    "description": "Deploy vLLM for high-throughput LLM serving. PagedAttention, continuous batching, tensor parallelism, and OpenAI-compatible API endpoint configuration.",
+    "level": "intermediate",
+    "readTime": 18,
+    "url": "/guides/vllm-setup-guide/"
+  },
+  {
+    "title": "llama.cpp Deep Dive",
+    "description": "GGUF quantization formats, K-quant vs IQ-quant tradeoffs, performance benchmarking, server mode, and custom grammar constraints for structured output.",
+    "level": "intermediate",
+    "readTime": 20,
+    "url": "/guides/llamacpp-deep-dive/"
+  },
+  {
+    "title": "Build a Local RAG System",
+    "description": "End-to-end RAG pipeline with Ollama, ChromaDB, LangChain, and sentence transformers. Document ingestion, chunking strategies, and hybrid search.",
+    "level": "intermediate",
+    "readTime": 22,
+    "url": "/guides/build-local-rag/"
+  },
+  {
+    "title": "ComfyUI for Programmers",
+    "description": "Headless ComfyUI — API mode, custom workflows as JSON, batch generation, queue management, and integration with external applications.",
+    "level": "intermediate",
+    "readTime": 16,
+    "url": "/guides/comfyui-for-programmers/"
+  },
+  {
+    "title": "HuggingFace Model Discovery",
+    "description": "How to search, evaluate, download, and convert models from HuggingFace Hub. Filtering by task, license, size, and benchmark scores.",
+    "level": "beginner",
+    "readTime": 10,
+    "url": "/guides/huggingface-model-discovery/"
+  },
+  {
+    "title": "Structured Output from Local LLMs",
+    "description": "JSON mode, grammar-based generation, function calling with local models. Compare Ollama, llama.cpp, and vLLM approaches to guaranteed structured output.",
+    "level": "advanced",
+    "readTime": 18,
+    "url": "/guides/structured-output-local-llms/"
+  },
+  {
+    "title": "Quantization Guide: Choosing the Right Precision",
+    "description": "Q2 to Q8 — what each quantization level means for quality vs speed vs memory. Benchmark data comparing perplexity and tokens/second across formats.",
+    "level": "intermediate",
+    "readTime": 14,
+    "url": "/guides/quantization-guide/"
+  },
+  {
+    "title": "Open WebUI: Your Local ChatGPT Alternative",
+    "description": "Install and configure Open WebUI with Ollama backend. User management, RAG integration, model switching, and custom system prompts.",
+    "level": "beginner",
+    "readTime": 12,
+    "url": "/guides/open-webui-setup/"
+  },
+  {
+    "title": "Self-Hosted AI Stack: Complete Architecture",
+    "description": "Design a production self-hosted AI stack: Ollama + vLLM + Open WebUI + Nginx + monitoring. Docker Compose setup, resource allocation, and scaling strategies.",
+    "level": "advanced",
+    "readTime": 25,
+    "url": "/guides/self-hosted-ai-stack/"
+  },
+  {
+    "title": "Model Evaluation for Local LLMs",
+    "description": "Use lm-eval-harness to benchmark local models. MMLU, GSM8K, HumanEval — run real evaluations on your hardware and compare results.",
+    "level": "advanced",
+    "readTime": 20,
+    "url": "/guides/model-evaluation-local-llms/"
+  }
+]

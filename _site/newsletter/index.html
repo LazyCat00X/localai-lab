@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Newsletter — LocalAI Lab</title>
+<meta name="description" content="Subscribe to the LocalAI Lab newsletter. Weekly guides on self-hosted AI, delivered to your inbox.">
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<header class="header">
+  <div class="container header-inner">
+    <a href="/" class="logo">~/localai-lab</a>
+    <nav class="nav">
+      <a href="/guides/">Guides</a>
+      <a href="/tools/">Tools</a>
+      <a href="/newsletter/">Newsletter</a>
+    </nav>
+  </div>
+</header>
+
+<section class="newsletter-section" style="padding-top:80px;">
+  <div class="container">
+    <div class="newsletter-box">
+      <h3>Stay in the Loop</h3>
+      <p>Weekly guides on self-hosted AI, LLMs, and local inference. Every Saturday morning — no spam, no fluff, just practical content from someone who actually runs this stuff.</p>
+      <div id="newsletter-form-container">
+        <div class="newsletter-form">
+          <input type="email" id="newsletter-email" placeholder="you@example.com" required>
+          <button id="newsletter-submit" onclick="subscribeNewsletter()">Subscribe</button>
+        </div>
+        <p style="font-size:0.8rem;color:var(--text-muted);margin-top:8px;">Join the waitlist — launching soon.</p>
+      </div>
+      <div id="newsletter-success" style="display:none;">
+        <p style="color:var(--accent-green);font-weight:600;">✓ Thanks for subscribing! You'll hear from us soon.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+function subscribeNewsletter() {
+  const email = document.getElementById('newsletter-email').value;
+  if (!email || !email.includes('@')) return;
+  // Store locally for now
+  const subs = JSON.parse(localStorage.getItem('lail_subs') || '[]');
+  subs.push({email, date: new Date().toISOString()});
+  localStorage.setItem('lail_subs', JSON.stringify(subs));
+  document.getElementById('newsletter-form-container').style.display = 'none';
+  document.getElementById('newsletter-success').style.display = 'block';
+}
+</script>
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <span>&copy; 2026 LocalAI Lab.</span>
+    <div class="footer-links">
+      <a href="/guides/">Guides</a>
+      <a href="/tools/">Tools</a>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

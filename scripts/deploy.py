@@ -46,37 +46,47 @@ def build_site():
     print(f"✓ Site built at {SITE_DIR}")
 
 def deploy_gh_pages():
-    """Deploy to GitHub Pages via gh-pages branch."""
-    print(f"\n🚀 Deploying to GitHub Pages...")
+    """Enable GitHub Pages serving from /docs on main branch."""
+    print(f"\n🚀 Enabling GitHub Pages from /docs...")
     
-    # Check for git repo
     if not (REPO_ROOT / ".git").exists():
-        print("❌ No git repository found. Set up a repo first:")
-        print()
-        print("  cd /home/kevyn/projects/localai-lab")
-        print("  git init")
-        print("  git add .")
-        print('  git commit -m "Initial commit"')
-        print("  gh repo create localai-lab --public --push")
-        print()
-        print("Then run this script again.")
+        print("❌ No git repository. Run: gh repo create localai-lab --public --source=.")
         sys.exit(1)
     
-    # Check if remote exists
     remotes = run("git remote -v")
     if not remotes:
-        print("❌ No git remote configured.")
-        print("Run: gh repo create localai-lab --public --push")
+        print("❌ No git remote. Run: gh repo create localai-lab --public --source=.")
         sys.exit(1)
     
-    # Deploy using gh
-    run(f"gh deploy {DOCS_DIR} --from-file")
-    print("✓ Deployed to GitHub Pages!")
-    print()
-    print("🌐 Your site will be live at:")
-    print("   https://<username>.github.io/localai-lab/")
-    print()
-    print("   ⚡ Configure a custom domain in repo Settings > Pages.")
+    # Push latest to main
+    run("git push origin main")
+    
+    # Enable GitHub Pages via API
+    owner_repo = run("gh repo view --json owner,name -q '.owner.login + \"/\" + .name'")
+    result = subprocess.run(
+        f'gh api repos/{owner_repo}/pages -X POST --input - <<< \'{{"source":{{"branch":"main","path":"/docs"}}}}\'',
+        shell=True, capture_output=True, text=True, timeout=30
+    )
+    if result.returncode == 0:
+        print("✓ GitHub Pages enabled!")
+    elif "already has a GitHub Pages site" in result.stderr:
+        # Update existing config
+        result = subprocess.run(
+            f'gh api repos/{owner_repo}/pages -X PUT --input - <<< \'{{"source":{{"branch":"main","path":"/docs"}}}}\'',
+            shell=True, capture_output=True, text=True, timeout=30
+        )
+        if result.returncode == 0:
+            print("✓ GitHub Pages config updated!")
+        else:
+            print(f"⚠ Update failed: {result.stderr.strip()}")
+            print("Manual: Settings > Pages > Source: Deploy from branch > main,/docs")
+    else:
+        print(f"⚠ API error: {result.stderr.strip()}")
+        print("Manual fix: Settings > Pages > Source: Deploy from branch > main,/docs")
+    
+    url = f"https://{owner_repo.split('/')[0]}.github.io/localai-lab/"
+    print(f"\n🌐 Live at: {url}")
+    print("   (may take 1-2 minutes to deploy)")
 
 def preview_local():
     """Start a local HTTP server for preview."""

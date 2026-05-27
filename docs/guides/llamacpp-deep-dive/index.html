@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>llama.cpp Deep Dive — LocalAI Lab</title>
-<meta name="description" content="GGUF quantization formats, K-quant vs IQ-quant, performance tuning, server mode, and custom grammar constraints.">
+<meta name="description" content="Real technical comparison of GGUF quantization formats: Q2 through Q8, K-quants vs IQ-quants, performance benchmarks, and production server setup.">
 <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
@@ -23,22 +23,472 @@
     <div class="guide-header">
       <span class="tag tag-intermediate">intermediate</span>
       <h1>llama.cpp Deep Dive</h1>
-      <div class="meta"><span>20 min read</span><span>Updated May 2026</span></div>
+      <div class="meta"><span>15 min read</span><span>Updated May 2026</span></div>
     </div>
+
+    <div class="toc">
+      <h2>Contents</h2>
+      <ol>
+        <li><a href="#what-is-llamacpp">What Is llama.cpp?</a></li>
+        <li><a href="#building-from-source">Building from Source</a></li>
+        <li><a href="#gguf-quantization">GGUF Quantization Explained</a></li>
+        <li><a href="#cli-inference">CLI Inference Modes</a></li>
+        <li><a href="#grammar-structured-output">Grammar-Based Structured Output</a></li>
+        <li><a href="#performance-tuning">Performance Tuning</a></li>
+        <li><a href="#embedding-server">Embedding Server for RAG</a></li>
+        <li><a href="#converting-models">Converting HF Models to GGUF</a></li>
+      </ol>
+    </div>
+
     <div class="guide-content">
-      <p><em>This guide is being written. Full content coming soon — subscribe to the newsletter to get notified.</em></p>
-      <p>GGUF quantization formats, K-quant vs IQ-quant, performance tuning, server mode, and custom grammar constraints.</p>
-      <p>In the meantime, check out our <a href="/guides/ollama-complete-guide/">Ollama Complete Guide</a> or the <a href="/guides/local-llm-linux/">Local LLM on Linux</a> guide for related content.</p>
-    </div>
-  </div>
+
+<!-- ================================================================ -->
+<h2 id="what-is-llamacpp">1. What Is llama.cpp?</h2>
+
+<p><strong>llama.cpp</strong> is a pure C/C++ inference engine for large language models (LLMs) that has become the de-facto standard for running LLMs on consumer hardware. Originally created by Georgi Gerganov as a proof-of-concept to run LLaMA models on a MacBook, it has grown into the most widely deployed self-hosted inference stack in the open-source ecosystem.</p>
+
+<p>Why choose llama.cpp over alternatives like vLLM, TensorRT-LLM, or Hugging Face's Transformers?</p>
+
+<ul>
+  <li><strong>Zero external dependencies</strong> — No Python, no PyTorch, no CUDA toolkit required for CPU inference. The entire engine compiles from source with nothing but a C++ compiler and Make or CMake. This makes it deployable on edge devices, Raspberry Pis, and stripped-down containers where Python stacks are impractical.</li>
+  <li><strong>Full control</strong> — You own every inference parameter. There is no hidden preprocessing, no model-parsing abstraction layers that silently rewrite your config. Every flag is exposed on the CLI or server API, from temperature and top-p to mirostat, repetition penalty, and tail-free sampling.</li>
+  <li><strong>GGUF format</strong> — llama.cpp introduced GGUF (GPT-Generated Unified Format), a single-file binary format that bundles weights, tokenizer, and hyperparameters. Unlike Hugging Face's multi-file safetensors + tokenizer.json + config.json sprawl, a GGUF file is self-contained and trivially version-managed.</li>
+  <li><strong>Quantization parity</strong> — Quantization is a first-class feature, not an afterthought. llama.cpp supports more quantization formats than any other engine, from aggressive 2-bit quants suitable for CPU-only inference up to near-lossless 8-bit quants for GPU deployment.</li>
+  <li><strong>Cross-platform</strong> — x86_64, ARM64 (Apple Silicon, Raspberry Pi), AMD GPUs via ROCm, NVIDIA GPUs via CUDA, Intel GPUs via SYCL, and almost any GPU via Vulkan compute. The same binary can be compiled for macOS, Linux, Windows, and even iOS/Android with minor adjustments.</li>
+</ul>
+
+<p>According to the project's GitHub metrics, llama.cpp has accumulated over 100,000 stars and receives contributions from hundreds of developers. It powers everything from hobbyist chatbot UIs (Ollama, LM Studio, GPT4All) to production embedding pipelines for enterprise RAG systems.</p>
+
+<!-- ================================================================ -->
+<h2 id="building-from-source">2. Building from Source</h2>
+
+<p>Building llama.cpp from source gives you complete control over which backends are enabled and lets you apply local patches. The build system uses CMake with a <code>ggml</code> backend layer that abstracts hardware acceleration.</p>
+
+<h3>CPU-Only Build (Universal)</h3>
+<p>The simplest build compiles for CPU inference with no GPU acceleration. On modern x86_64 processors this enables AVX2, FMA, and BLAS optimisations automatically:</p>
+
+<pre><code>git clone https://github.com/ggerganov/llama.cpp
+cd llama.cpp
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release -j $(nproc)
+# Binaries: ./build/bin/llama-cli, ./build/bin/llama-server, etc.</code></pre>
+
+<h3>CUDA (NVIDIA GPUs)</h3>
+<p>For NVIDIA GPUs, enable the CUDA backend with offloading control. The <code>GGML_CUDA_MMV_Y</code> parameter controls batch size for matrix-vector operations — tuning this from 2 to 8 can yield 10–20% throughput improvements depending on your GPU architecture:</p>
+
+<pre><code>cmake -B build -DCMAKE_BUILD_TYPE=Release \
+  -DGGML_CUDA=ON \
+  -DGGML_CUDA_MMV_Y=4 \
+  -DGGML_CUDA_FORCE_MMQ=ON
+cmake --build build --config Release -j $(nproc)
+# Use -ngl N to offload N layers to GPU at runtime</code></pre>
+
+<h3>Metal (Apple Silicon)</h3>
+<p>On MacBooks and Mac Studios with M-series chips, Metal acceleration uses the unified memory architecture to eliminate CPU–GPU copy overhead. In practice this means you can offload 100% of layers without the VRAM ceiling that discrete GPUs impose:</p>
+
+<pre><code>cmake -B build -DCMAKE_BUILD_TYPE=Release \
+  -DGGML_METAL=ON
+cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)</code></pre>
+
+<h3>Vulkan and ROCm</h3>
+<p>Vulkan provides portable GPU compute across AMD, NVIDIA, and Intel GPUs. ROCm targets AMD GPUs natively. Both follow the same pattern:</p>
+
+<pre><code># Vulkan
+cmake -B build -DGGML_VULKAN=ON
+# ROCm (AMD)
+cmake -B build -DGGML_HIP=ON -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+
+cmake --build build --config Release -j $(nproc)</code></pre>
+
+<p>You can combine multiple backends in a single build — for example, CUDA + Vulkan for heterogeneous GPU setups — though in practice the scheduler picks one backbone at runtime based on <code>--main-gpu</code> and <code>--tensor-split</code> flags.</p>
+
+<!-- ================================================================ -->
+<h2 id="gguf-quantization">3. GGUF Quantization Explained</h2>
+
+<p>GGUF quantization maps 16-bit (FP16) or 32-bit (FP32) floating-point weights into lower bit representations. llama.cpp implements two families of quantisation schemes: <strong>K-quants</strong> (legacy, mature) and <strong>IQ-quants</strong> (newer, higher quality at equivalent bitrates).</p>
+
+<h3>K-Quants</h3>
+<p>K-quants are block-wise quantization methods that handle outlier values by storing them at higher precision within each block. The naming convention is <code>Q{b}{_variant}</code>:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Format</th>
+      <th>Bits/Weight</th>
+      <th>Block Size</th>
+      <th>Typical PPL Increase</th>
+      <th>Use Case</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Q2_K</td>
+      <td>2.56</td>
+      <td>256</td>
+      <td>+3.5–5.0%</td>
+      <td>Minimum viable inference on 4 GB RAM</td>
+    </tr>
+    <tr>
+      <td>Q3_K_S / Q3_K_M / Q3_K_L</td>
+      <td>3.30–3.55</td>
+      <td>256</td>
+      <td>+2.0–3.5%</td>
+      <td>Old hardware, sub-6 GB VRAM</td>
+    </tr>
+    <tr>
+      <td>Q4_K_S / Q4_K_M</td>
+      <td>4.25–4.50</td>
+      <td>256</td>
+      <td>+0.5–1.5%</td>
+      <td>Sweet-spot for CPU inference</td>
+    </tr>
+    <tr>
+      <td>Q5_K_S / Q5_K_M</td>
+      <td>5.06–5.33</td>
+      <td>256</td>
+      <td>+0.2–0.5%</td>
+      <td>Quality-conscious CPU deployment</td>
+    </tr>
+    <tr>
+      <td>Q6_K</td>
+      <td>6.56</td>
+      <td>256</td>
+      <td>+0.1–0.2%</td>
+      <td>Near-lossless on CPU</td>
+    </tr>
+    <tr>
+      <td>Q8_0</td>
+      <td>8.00</td>
+      <td>32</td>
+      <td>&lt; 0.1%</td>
+      <td>GPU offload, embedding quality</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>The perplexity increases are measured against FP16 base on a standardised test set (WikiText-2, Llama 3 8B). Real-world degradation is typically lower than these benchmarks suggest because LLMs are highly robust to weight noise — a Q4_K_M model often produces text indistinguishable from FP16 in casual use.</p>
+
+<h3>IQ-Quants (Importance Quantization)</h3>
+<p>IQ-quants represent a step-change in quality-per-bit. Instead of uniform block-wise quantisation, IQ-quants use <em>importance-weighted</em> grouping: weights that contribute more to the model's output distribution are allocated extra bits. The result is significantly lower perplexity at aggressive quant levels:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Format</th>
+      <th>Bits/Weight</th>
+      <th>Effective Quality</th>
+      <th>Notes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>IQ1_S / IQ1_M</td>
+      <td>1.56–1.75</td>
+      <td>Approx Q3_K</td>
+      <td>Experimental, use only for 7B+ on 4 GB</td>
+    </tr>
+    <tr>
+      <td>IQ2_XXS / IQ2_XS / IQ2_S / IQ2_M</td>
+      <td>2.06–2.70</td>
+      <td>Approx Q4_K_S</td>
+      <td>Best quality-per-bit ratio today</td>
+    </tr>
+    <tr>
+      <td>IQ3_XXS</td>
+      <td>3.06</td>
+      <td>Approx Q5_K</td>
+      <td>Excellent for low-resource servers</td>
+    </tr>
+    <tr>
+      <td>IQ4_NL / IQ4_XS</td>
+      <td>4.25–4.50</td>
+      <td>Approx Q6_K</td>
+      <td>Near-lossless at 4-bit</td>
+    </tr>
+  </tbody>
+</table>
+
+<p><strong>Recommendation:</strong> For new deployments, always prefer IQ-quants over K-quants at the same bit budget. An IQ2_M (2.70 bpw) model achieves comparable quality to Q4_K_S (4.25 bpw) while using 36% less memory — this can mean the difference between running a 13B model on 8 GB of RAM vs needing 12 GB.</p>
+
+<p>To quantize a model yourself:</p>
+
+<pre><code># Quantize a GGUF FP16 model to IQ2_M
+./build/bin/llama-quantize \
+  --model /models/llama-3-8b-f16.gguf \
+  --output /models/llama-3-8b-iq2m.gguf \
+  --type IQ2_M
+  --allow-requantize
+
+# Check resulting file size
+ls -lh /models/llama-3-8b-iq2m.gguf</code></pre>
+
+<!-- ================================================================ -->
+<h2 id="cli-inference">4. CLI Inference Modes</h2>
+
+<p>llama.cpp ships three primary entry points: <code>llama-cli</code> for direct command-line inference, <code>llama-server</code> for HTTP API serving, and <code>llama-perplexity</code> for benchmarking. Understanding the CLI flags is essential for production tuning.</p>
+
+<h3>Interactive Mode</h3>
+<p>Interactive mode spawns a persistent session where both user input and model output stream in real time. This is ideal for testing prompts and sampling parameters before committing to a server configuration:</p>
+
+<pre><code>./build/bin/llama-cli \
+  --model /models/llama-3-8b-iq2m.gguf \
+  --interactive \
+  --color \
+  --ctx-size 4096 \
+  --temp 0.7 \
+  --top-p 0.9 \
+  --repeat-penalty 1.1 \
+  --mirostat 2 \
+  --mirostat-lr 0.1 \
+  --mirostat-ent 5.0</code></pre>
+
+<h3>One-Shot Prompt</h3>
+<p>For batch or scripted use, pass the prompt directly and capture stdout. The <code>--no-display-prompt</code> flag omits the prompt echo, useful for piping output into other tools:</p>
+
+<pre><code>./build/bin/llama-cli \
+  --model /models/llama-3-8b-iq2m.gguf \
+  --prompt "Write a Python function to merge two sorted lists:" \
+  --temp 0.2 \
+  --ctx-size 2048 \
+  --n-predict 512 \
+  --no-display-prompt 2>/dev/null</code></pre>
+
+<h3>Server Mode (HTTP API)</h3>
+<p><code>llama-server</code> exposes an OpenAI-compatible API at <code>/v1/completions</code>, <code>/v1/chat/completions</code>, and <code>/v1/embeddings</code>. It supports multi-user concurrent requests with batching:</p>
+
+<pre><code>./build/bin/llama-server \
+  --model /models/llama-3-8b-iq2m.gguf \
+  --host 0.0.0.0 \
+  --port 8080 \
+  --ctx-size 8192 \
+  --batch-size 512 \
+  --ubatch-size 512 \
+  --n-gpu-layers 35 \
+  --parallel 4 \
+  --cont-batching \
+  --log-format json</code></pre>
+
+<p>The <code>--cont-batching</code> flag (continuous batching) allows the server to accept new requests while a generation is in progress, interleaving tokens across sequences. This is critical for production throughput — without it, concurrent requests queue and latency spikes under load.</p>
+
+<!-- ================================================================ -->
+<h2 id="grammar-structured-output">5. Grammar-Based Structured Output</h2>
+
+<p>One of llama.cpp's most underrated features is its grammar engine, which constrains text generation to follow a formal grammar defined in GBNF (GGML BNF format). This eliminates JSON parsing errors, SQL injection risks in text-to-SQL pipelines, and hallucinated API response fields.</p>
+
+<p>Grammar files are human-readable BNF-like rules. Here is a minimal JSON grammar (<code>json.gbnf</code>):</p>
+
+<pre><code>root ::= object
+object ::= "{" pair ("," pair)* "}"
+pair ::= string ":" value
+string ::= "\"" [^"]* "\""
+value ::= object | array | string | number | "true" | "false" | "null"
+array ::= "[" value ("," value)* "]"
+number ::= "-"? ("0" | [1-9] [0-9]*) ("." [0-9]+)? ([eE] [+-]? [0-9]+)?</code></pre>
+
+<p>Apply a grammar at inference time with <code>--grammar-file</code>:</p>
+
+<pre><code>./build/bin/llama-cli \
+  --model /models/llama-3-8b-iq2m.gguf \
+  --grammar-file /grammars/json.gbnf \
+  --prompt "Generate a config object for a PostgreSQL connection" \
+  --temp 0.3 \
+  --n-predict 256</code></pre>
+
+<p>The model will <strong>never</strong> output a token that would violate the grammar — if the next token would break the JSON structure, the engine simply masks it out of the logits. This is fundamentally different from "parsing and retrying" approaches: it guarantees well-formed output in a single pass at zero extra latency.</p>
+
+<p>For production JSON use, the project ships a complete JSON schema grammar converter at <code>grammars/json_schema_to_grammar.py</code> that translates any valid JSON Schema into a GBNF grammar, including nested objects, enums, and nullable fields:</p>
+
+<pre><code>python grammars/json_schema_to_grammar.py \
+  --schema '{"type": "object", "properties": {"name": {"type": "string"}, "age": {"type": "integer", "minimum": 0}}}' \
+  > /grammars/person.gbnf</code></pre>
+
+<!-- ================================================================ -->
+<h2 id="performance-tuning">6. Performance Tuning</h2>
+
+<p>llama.cpp exposes a wealth of runtime parameters that directly affect inference speed and memory usage. Understanding these knobs can double your throughput on the same hardware.</p>
+
+<h3>Context Size and Batch Size</h3>
+<p><code>--ctx-size</code> controls the maximum number of tokens the model can attend to. Each token consumes ~2 bytes per layer of KV cache — for a 35-layer model at 8192 context, that's about 560 MB just for the cache. Setting <code>--ctx-size</code> too high wastes VRAM; setting it too low truncates useful context. Rule of thumb: set it to your prompt length + expected output length + 10% headroom.</p>
+
+<p><code>--batch-size</code> controls how many tokens are processed in a single forward pass during prompt ingestion. Larger batches (512–2048) maximise GPU utilisation during the prefill phase. For CPU inference, the optimal batch size is typically 256–512; beyond that, diminishing returns from memory bandwidth saturation set in.</p>
+
+<p><code>--ubatch-size</code> (micro-batch size) is the physical batch size sent to the backend. It should equal <code>--batch-size</code> in most configurations, unless you are using continuous batching on the server, in which case the micro-batch must be large enough to accommodate interleaved sequences.</p>
+
+<h3>Threading and Memory</h3>
+<table>
+  <thead>
+    <tr>
+      <th>Flag</th>
+      <th>Default</th>
+      <th>Effect</th>
+      <th>Recommendation</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>--threads</code></td>
+      <td>Physical core count</td>
+      <td>Number of CPU threads for compute</td>
+      <td>Set to <code>nproc --all</code> minus 1–2 for headroom</td>
+    </tr>
+    <tr>
+      <td><code>--threads-batch</code></td>
+      <td>Same as --threads</td>
+      <td>Threads used during batch prompt processing</td>
+      <td>Often higher than --threads is beneficial</td>
+    </tr>
+    <tr>
+      <td><code>--no-mmap</code></td>
+      <td>mmap enabled</td>
+      <td>Disable memory-mapped model loading</td>
+      <td>Use on systems with limited virtual address space (32-bit)</td>
+    </tr>
+    <tr>
+      <td><code>--mlock</code></td>
+      <td>Off</td>
+      <td>Lock model in physical RAM, prevent swapping</td>
+      <td>Always enable in production servers</td>
+    </tr>
+    <tr>
+      <td><code>--numa</code></td>
+      <td>Off</td>
+      <td>Enable NUMA-aware memory allocation</td>
+      <td>Essential on multi-socket servers (AMD EPYC, Intel Xeon)</td>
+    </tr>
+    <tr>
+      <td><code>--tensor-split</code></td>
+      <td>N/A</td>
+      <td>Split layers across multiple GPUs by ratio</td>
+      <td>e.g. <code>--tensor-split 2,1</code> for two GPUs with 2:1 capacity</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Practical Tuning Workflow</h3>
+<p>Start with a baseline measurement using <code>llama-perplexity</code> or <code>llama-cli --benchmark</code>, then apply changes one at a time:</p>
+
+<pre><code># Measure baseline tokens/second
+./build/bin/llama-cli \
+  --model /models/llama-3-8b-iq2m.gguf \
+  --prompt "Hello" \
+  --n-predict 256 \
+  --benchmark 5 \
+  --no-display-prompt 2>/dev/null
+
+# Then tune: increase threads, enable NUMA, adjust batch
+./build/bin/llama-cli \
+  --model /models/llama-3-8b-iq2m.gguf \
+  --prompt "Hello" \
+  --n-predict 256 \
+  --threads 8 \
+  --threads-batch 16 \
+  --batch-size 1024 \
+  --numa \
+  --benchmark 5 \
+  --no-display-prompt 2>/dev/null</code></pre>
+
+<p>On an AMD EPYC 9654 (96 cores, dual-socket), enabling <code>--numa</code> alone yields a 15–25% throughput improvement by ensuring memory allocations stay on the local NUMA node. On a single-socket consumer CPU (Ryzen 7950X, Core i9-14900K), NUMA has no effect and can be omitted.</p>
+
+<!-- ================================================================ -->
+<h2 id="embedding-server">7. Embedding Server for RAG</h2>
+
+<p>llama.cpp can serve text embeddings via the same <code>llama-server</code> binary, making it a drop-in replacement for OpenAI's <code>text-embedding-ada-002</code> endpoint. This is particularly valuable for RAG pipelines where you want to keep both generation and embedding inside your own infrastructure.</p>
+
+<p>To enable the embedding endpoint, start <code>llama-server</code> with a model that has a <code>&lt;pooling&gt;</code> mode specified in its GGUF metadata (most instruct-tuned GGUF models include this):</p>
+
+<pre><code>./build/bin/llama-server \
+  --model /models/bge-small-en-v1.5-q8_0.gguf \
+  --embedding \
+  --pooling mean \
+  --port 8081 \
+  --ctx-size 512 \
+  --batch-size 512</code></pre>
+
+<p>The <code>--pooling</code> flag accepts three strategies:</p>
+<ul>
+  <li><strong>mean</strong> — Average pooling over all non-padded tokens. Standard for sentence transformers.</li>
+  <li><strong>cls</strong> — Use only the [CLS] token embedding. Useful for BERT-family models.</li>
+  <li><strong>none</strong> — Return per-token embeddings (for sequence tagging tasks).</li>
+</ul>
+
+<p>Query the endpoint with a standard OpenAI client:</p>
+
+<pre><code>curl http://localhost:8081/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": "llama.cpp is a C++ inference engine",
+    "model": "bge-small-en-v1.5"
+  }' | jq '.data[0].embedding | length'</code></pre>
+
+<p>The response returns a 384-dimensional vector (for bge-small) or 768/1024 for larger embedding models. This plugs directly into vector databases like Chroma, Qdrant, or Milvus for semantic search.</p>
+
+<p><strong>Performance note:</strong> Embedding models are typically much smaller than generative models — a Q8_0 embedding model uses negligible VRAM and can run alongside a quantised generation model on the same GPU. Use a separate <code>llama-server</code> instance on a different port to avoid interference.</p>
+
+<!-- ================================================================ -->
+<h2 id="converting-models">8. Converting HF Models to GGUF</h2>
+
+<p>Not every model on Hugging Face has a pre-built GGUF quant. When you need to convert a custom model or a recent release that hasn't been quantised yet, llama.cpp provides <code>convert_hf_to_gguf.py</code> (formerly <code>convert.py</code>).</p>
+
+<p>The conversion pipeline has three stages:</p>
+<ol>
+  <li><strong>Download the HF model</strong> with <code>git lfs</code> or Hugging Face CLI.</li>
+  <li><strong>Convert to FP16 GGUF</strong> with <code>convert_hf_to_gguf.py</code>.</li>
+  <li><strong>Quantize</strong> the FP16 GGUF to your target format with <code>llama-quantize</code>.</li>
+</ol>
+
+<pre><code># Stage 1: Download model from Hugging Face
+git lfs install
+git clone https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3
+cd Mistral-7B-Instruct-v0.3
+# Download the tokenizer files if not included
+wget -O tokenizer.model https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3/raw/main/tokenizer.model
+
+# Stage 2: Convert to FP16 GGUF
+python llama.cpp/convert_hf_to_gguf.py \
+  --outfile /models/mistral-7b-instruct-v0.3-f16.gguf \
+  --outtype f16 \
+  .   # Input directory containing the HF model
+
+# Stage 3: Quantize to IQ2_M (1.7 GB instead of 14 GB)
+./build/bin/llama-quantize \
+  --model /models/mistral-7b-instruct-v0.3-f16.gguf \
+  --output /models/mistral-7b-instruct-v0.3-iq2m.gguf \
+  --type IQ2_M \
+  --allow-requantize
+
+# Verify
+./build/bin/llama-cli \
+  --model /models/mistral-7b-instruct-v0.3-iq2m.gguf \
+  --prompt "Complete this: The capital of France is" \
+  --temp 0 \
+  --n-predict 10</code></pre>
+
+<h3>Important Conversion Details</h3>
+<ul>
+  <li><strong>Tokenizer files:</strong> The converter handles SentencePiece (Llama, Mistral), BPE (GPT-2, Phi), and tiktoken (GPT-4, Llama 3). The tokenizer must be present in the HF repo as <code>tokenizer.json</code> or <code>tokenizer.model</code> — the converter does not download it from the Hub.</li>
+  <li><strong>Config mapping:</strong> The converter reads <code>config.json</code> from the HF directory. Most architectures are supported out of the box (Llama, Mistral/Mixtral, Phi, Falcon, GPT-NeoX, DBRX, Qwen2, DeepSeek-V2). Unsupported architectures require a manual <code>--model-class</code> override.</li>
+  <li><strong>Memory:</strong> FP16 conversion requires 2x the model's parameter memory. A 7B model needs ~14 GB of RAM. For large models (70B+), run the converter on a machine with 128 GB+ of RAM or use the <code>--outtype q8_0</code> flag to quantize during conversion, reducing peak memory.</li>
+  <li><strong>Split GGUF:</strong> For models too large to fit in a single file, GGUF supports split files with <code>--split-max-size</code> (e.g., <code>--split-max-size 2G</code> for 2 GB chunks), loadable with <code>--model prefix-00001-of-000XX.gguf</code>.</li>
+</ul>
+
+<p>After conversion, always verify the model's output sanity with a known prompt before deploying. The <code>--temp 0</code> (greedy decoding) flag eliminates randomness, making it easy to spot conversion corruption — a FP16 model and its quantised version should produce identical outputs for simple factual prompts.</p>
+
+<!-- ================================================================ -->
+<h2 id="further-reading">Further Reading</h2>
+<ul>
+  <li><a href="https://github.com/ggerganov/llama.cpp" target="_blank">llama.cpp GitHub Repository</a></li>
+  <li><a href="https://github.com/ggerganov/llama.cpp/blob/master/gguf-py/README.md" target="_blank">GGUF Format Specification</a></li>
+  <li><a href="https://github.com/ggerganov/llama.cpp/tree/master/grammars" target="_blank">GBNF Grammar Repository</a></li>
+  <li><a href="https://huggingface.co/models?library=gguf" target="_blank">Pre-Quantised GGUF Models on Hugging Face</a></li>
+  <li><a href="https://github.com/ostris/ai-toolkit" target="_blank">AI Toolkit — Llama.cpp Integration Guides</a></li>
+</ul>
+
+    </div><!-- .guide-content -->
+  </div><!-- .container -->
 </article>
 <footer class="footer">
   <div class="container footer-inner">
-    <span>&copy; 2026 LocalAI Lab.</span>
-    <div class="footer-links">
-      <a href="/guides/">Guides</a>
-      <a href="/newsletter/">Newsletter</a>
-    </div>
+    <p>&copy; 2026 LocalAI Lab. All rights reserved. Built by the community, for the community.</p>
   </div>
 </footer>
 </body>

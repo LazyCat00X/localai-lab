@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>vLLM Setup Guide — LocalAI Lab</title>
-<meta name="description" content="Deploy vLLM for high-throughput LLM serving. PagedAttention, continuous batching, tensor parallelism, and production API configuration.">
+<meta name="description" content="Complete vLLM setup guide: install, configure, and optimize vLLM for high-throughput LLM inference with PagedAttention and continuous batching.">
 <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
@@ -23,12 +23,502 @@
     <div class="guide-header">
       <span class="tag tag-intermediate">intermediate</span>
       <h1>vLLM Setup Guide</h1>
-      <div class="meta"><span>18 min read</span><span>Updated May 2026</span></div>
+      <div class="meta"><span>12 min read</span><span>Updated May 2026</span></div>
+    </div>
+    <div class="toc">
+      <h3>Table of Contents</h3>
+      <ol>
+        <li><a href="#what-is-vllm">What is vLLM?</a></li>
+        <li><a href="#installation">Installation</a></li>
+        <li><a href="#basic-usage">Basic Usage</a></li>
+        <li><a href="#api-server">OpenAI-Compatible API Server</a></li>
+        <li><a href="#advanced">Advanced: Quantization &amp; LoRA</a></li>
+        <li><a href="#performance">Performance Tuning</a></li>
+        <li><a href="#production">Production Deployment</a></li>
+        <li><a href="#comparison">vLLM vs. Alternatives</a></li>
+        <li><a href="#troubleshooting">Troubleshooting</a></li>
+      </ol>
     </div>
     <div class="guide-content">
-      <p><em>This guide is being written. Full content coming soon — subscribe to the newsletter to get notified.</em></p>
-      <p>Deploy vLLM for high-throughput LLM serving. PagedAttention, continuous batching, tensor parallelism, and production API configuration.</p>
-      <p>In the meantime, check out our <a href="/guides/ollama-complete-guide/">Ollama Complete Guide</a> or the <a href="/guides/local-llm-linux/">Local LLM on Linux</a> guide for related content.</p>
+
+      <h2 id="what-is-vllm">What is vLLM?</h2>
+
+      <p>vLLM is an open-source high-throughput LLM inference engine developed at UC Berkeley. It is designed to serve large language models with minimal latency and maximal throughput, making it the go-to choice for production AI serving. Unlike naive inference implementations that waste GPU memory on pre-allocated KV-cache slots, vLLM introduces <strong>PagedAttention</strong> — a memory management technique inspired by operating system virtual memory paging.</p>
+
+      <p>PagedAttention works by dividing the KV-cache into fixed-size blocks (pages) that are allocated on demand. This eliminates internal fragmentation and allows the system to pack more concurrent requests into the same GPU memory. On top of that, vLLM implements <strong>continuous batching</strong>: instead of waiting for a full batch to finish before accepting new requests, the engine dynamically adds and removes sequences from the active batch after every decoding step. The result is dramatically higher GPU utilization and lower time-to-first-token (TTFT).</p>
+
+      <p><strong>Key features at a glance:</strong></p>
+      <ul>
+        <li>PagedAttention for near-zero KV-cache waste</li>
+        <li>Continuous batching for real-time request handling</li>
+        <li>OpenAI-compatible REST API out of the box</li>
+        <li>Tensor parallelism across multiple GPUs</li>
+        <li>Support for AWQ, GPTQ, and FP8 quantization</li>
+        <li>LoRA adapter hot-swapping at runtime</li>
+        <li>Prefix caching for shared prompt prefixes</li>
+        <li>Speculative decoding for latency reduction</li>
+      </ul>
+
+      <p>vLLM supports a wide range of model architectures including Llama, Mistral, Mixtral, Qwen, DeepSeek, Gemma, Phi, Falcon, GPT-NeoX, and many more. It integrates natively with Hugging Face Transformers and can load models from the hub with a single line of code.</p>
+
+      <h2 id="installation">Installation</h2>
+
+      <p>vLLM can be installed via pip, from source (for custom CUDA kernels), or via Docker for production deployments. Below are all three methods.</p>
+
+      <h3>Option 1: pip Install (Recommended)</h3>
+
+      <p>The simplest way to get started is with pip. vLLM ships pre-built wheels for Linux on x86_64 with CUDA 11.8, 12.1, and 12.4.</p>
+
+<pre><code>$ python -m venv vllm-env
+$ source vllm-env/bin/activate
+$ pip install vllm
+
+# Verify the installation
+$ python -c "import vllm; print(vllm.__version__)"</code></pre>
+
+      <p>On a fresh Ubuntu 22.04 / 24.04 system, you may need to install CUDA drivers and PyTorch first:</p>
+
+<pre><code>$ pip install torch --index-url https://download.pytorch.org/whl/cu124
+$ pip install vllm</code></pre>
+
+      <h3>Option 2: Build from Source</h3>
+
+      <p>Building from source is useful if you need custom CUDA architecture flags, or if you are on a platform without pre-built wheels (e.g., ARM, ROCm, or custom CUDA versions). You need a CUDA toolkit (12.x) and PyTorch installed.</p>
+
+<pre><code>$ git clone https://github.com/vllm-project/vllm.git
+$ cd vllm
+$ pip install -e .  # editable install, compiles custom kernels
+
+# For AMD ROCm:
+# export VLLM_TARGET_DEVICE=rocm && pip install -e .
+
+# For specific GPU architectures (faster compile):
+# export TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;9.0"</code></pre>
+
+      <p>Building from source can take 10–30 minutes depending on your CPU. The compilation produces optimized CUDA kernels for PagedAttention and the custom sampling ops.</p>
+
+      <h3>Option 3: Docker</h3>
+
+      <p>The official vLLM Docker image is the best option for production. It comes pre-compiled and optimized.</p>
+
+<pre><code>$ docker pull vllm/vllm-openai:latest
+
+# Quick smoke-test
+$ docker run --rm --gpus all \
+    -p 8000:8000 \
+    vllm/vllm-openai:latest \
+    --model meta-llama/Meta-Llama-3.1-8B-Instruct</code></pre>
+
+      <p>The Docker image includes all CUDA runtime dependencies, avoids host library conflicts, and can be used directly with Kubernetes or any container orchestrator.</p>
+
+      <h2 id="basic-usage">Basic Usage</h2>
+
+      <p>Once vLLM is installed, you can load a model and run inference using the Python API. Here is a minimal example:</p>
+
+<pre><code>from vllm import LLM, SamplingParams
+
+# Load the model — this downloads from Hugging Face if not cached
+llm = LLM(
+    model="meta-llama/Meta-Llama-3.1-8B-Instruct",
+    tensor_parallel_size=1,      # set to number of GPUs
+    gpu_memory_utilization=0.90, # leave headroom for CUDA kernels
+    max_model_len=8192,          # context window
+)
+
+# Configure generation parameters
+sampling_params = SamplingParams(
+    temperature=0.7,
+    top_p=0.9,
+    max_tokens=512,
+    stop=["<|eot_id|>", "<|end_of_text|>"],
+)
+
+# Run inference
+prompts = [
+    "Explain quantum computing in one paragraph.",
+    "Write a Python function to merge two sorted lists.",
+]
+outputs = llm.generate(prompts, sampling_params)
+
+# Print results
+for output in outputs:
+    prompt = output.prompt
+    generated = output.outputs[0].text
+    print(f"Prompt: {prompt}")
+    print(f"Generated: {generated}")
+    print("-" * 60)</code></pre>
+
+      <p>The <code>LLM</code> constructor handles model loading, weight quantization (if specified), and memory allocation. Each call to <code>generate()</code> processes the prompts concurrently using continuous batching — the engine will automatically schedule them for maximum throughput.</p>
+
+      <h3>Streaming Output</h3>
+
+      <p>For interactive applications, use streaming:</p>
+
+<pre><code>for output in llm.generate(prompts, sampling_params, use_tqdm=False):
+    for req_id, stream in output:
+        for chunk in stream:
+            print(chunk.outputs[0].text, end="", flush=True)
+        print()</code></pre>
+
+      <h2 id="api-server">OpenAI-Compatible API Server</h2>
+
+      <p>vLLM ships a built-in OpenAI-compatible HTTP server. This means you can use any OpenAI SDK client (like <code>openai-python</code>) to talk to your vLLM instance. Start the server with:</p>
+
+<pre><code>$ python -m vllm.entrypoints.openai.api_server \
+    --model meta-llama/Meta-Llama-3.1-8B-Instruct \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --tensor-parallel-size 1 \
+    --max-model-len 8192 \
+    --gpu-memory-utilization 0.90 \
+    --served-model-name llama-3.1-8b</code></pre>
+
+      <p>Then use it like OpenAI's API:</p>
+
+<pre><code>from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="not-needed",  # vLLM accepts any string
+)
+
+response = client.chat.completions.create(
+    model="llama-3.1-8b",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is the capital of France?"},
+    ],
+    temperature=0.7,
+    max_tokens=256,
+)
+print(response.choices[0].message.content)</code></pre>
+
+      <p>The server exposes <code>/v1/chat/completions</code>, <code>/v1/completions</code>, <code>/v1/embeddings</code>, and <code>/v1/models</code> — fully compatible with the OpenAI API schema. This makes it a drop-in replacement for any application already using the OpenAI API.</p>
+
+      <h2 id="advanced">Advanced: Quantization &amp; LoRA</h2>
+
+      <h3>AWQ and GPTQ Quantization</h3>
+
+      <p>vLLM supports AWQ (Adaptive Weight Quantization) and GPTQ (GPT Post-Training Quantization) to reduce model memory footprint by 2–4x with minimal accuracy loss. Loading an AWQ-quantized model is as simple as specifying the quantized hub path:</p>
+
+<pre><code>llm = LLM(
+    model="TheBloke/Meta-Llama-3.1-8B-Instruct-AWQ",
+    quantization="awq",
+    gpu_memory_utilization=0.95,
+)</code></pre>
+
+      <p>For GPTQ:</p>
+
+<pre><code>llm = LLM(
+    model="TheBloke/Llama-2-7B-Chat-GPTQ",
+    quantization="gptq",
+)</code></pre>
+
+      <p>Quantization is handled at the kernel level — vLLM uses fused AWQ/GPTQ kernels that dequantize weights on-the-fly during the matmul, keeping arithmetic in FP16 while storing weights in INT4. The throughput difference vs FP16 is often within 5–10%, while memory usage drops by ~60%.</p>
+
+      <h3>FP8 (H100/H200 Only)</h3>
+
+      <p>On NVIDIA Hopper GPUs (H100, H200), vLLM supports FP8 quantization using the Transformer Engine. Enable it with <code>--quantization fp8</code> or in Python:</p>
+
+<pre><code>llm = LLM(
+    model="meta-llama/Meta-Llama-3.1-8B-Instruct",
+    quantization="fp8",
+    kv_cache_dtype="fp8",
+)</code></pre>
+
+      <p>FP8 halves both memory and bandwidth usage compared to FP16, yielding up to 2x throughput on H100 with comparable quality.</p>
+
+      <h3>LoRA Adapters</h3>
+
+      <p>vLLM supports serving multiple LoRA adapters simultaneously with zero-overhead switching. This is useful for multi-tenant setups where each user has a fine-tuned adapter.</p>
+
+<pre><code>from vllm import LLM, SamplingParams
+
+llm = LLM(
+    model="meta-llama/Meta-Llama-3.1-8B-Instruct",
+    enable_lora=True,
+    max_lora_rank=64,
+    max_num_seqs=16,
+)
+
+# Generate with a specific LoRA adapter (by Hugging Face ID or local path)
+outputs = llm.generate(
+    prompts=["Explain the plot of Dune."],
+    sampling_params=SamplingParams(temperature=0.8, max_tokens=256),
+    lora_request="path/to/your-lora-adapter",
+)</code></pre>
+
+      <p>You can serve multiple LoRA adapters from the API server using the <code>--lora-modules</code> flag:</p>
+
+<pre><code>$ python -m vllm.entrypoints.openai.api_server \
+    --model meta-llama/Meta-Llama-3.1-8B-Instruct \
+    --enable-lora \
+    --lora-modules lora-adapter-1=/path/to/lora1 lora-adapter-2=/path/to/lora2 \
+    --max-lora-rank 64</code></pre>
+
+      <p>The client selects the adapter by passing the <code>model</code> field as the LoRA module name in the API request.</p>
+
+      <h3>Tensor Parallelism</h3>
+
+      <p>For models too large for a single GPU (e.g., 70B or 405B), use tensor parallelism to split layers across GPUs:</p>
+
+<pre><code>$ python -m vllm.entrypoints.openai.api_server \
+    --model meta-llama/Meta-Llama-3.1-405B-Instruct \
+    --tensor-parallel-size 8 \
+    --pipeline-parallel-size 1 \
+    --max-model-len 16384 \
+    --gpu-memory-utilization 0.95</code></pre>
+
+      <p>Tensor parallelism shards each transformer layer's weights across GPUs and uses all-reduce for intermediate activations. vLLM uses custom CUDA kernels that minimize communication overhead by overlapping computation with NCCL transfers.</p>
+
+      <h2 id="performance">Performance Tuning</h2>
+
+      <p>Getting the best throughput from vLLM requires tuning several knobs. The table below shows the most impactful parameters.</p>
+
+      <table class="table">
+        <tr>
+          <th>Parameter</th>
+          <th>Default</th>
+          <th>Recommended</th>
+          <th>Notes</th>
+        </tr>
+        <tr>
+          <td><code>max_num_seqs</code></td>
+          <td>256</td>
+          <td>64–1024</td>
+          <td>Max concurrent sequences in a batch. Lower = lower latency, higher = higher throughput. Monitor GPU memory.</td>
+        </tr>
+        <tr>
+          <td><code>max_model_len</code></td>
+          <td>model default</td>
+          <td>4096–32768</td>
+          <td>Context window size. Larger values consume more KV-cache memory per sequence.</td>
+        </tr>
+        <tr>
+          <td><code>gpu_memory_utilization</code></td>
+          <td>0.90</td>
+          <td>0.85–0.95</td>
+          <td>Fraction of GPU memory for the model + KV-cache. Leave headroom for CUDA kernels.</td>
+        </tr>
+        <tr>
+          <td><code>block_size</code></td>
+          <td>16</td>
+          <td>16–128</td>
+          <td>PagedAttention block size in tokens. Larger blocks reduce memory overhead but increase internal fragmentation.</td>
+        </tr>
+        <tr>
+          <td><code>swap_space</code></td>
+          <td>4 GB</td>
+          <td>4–16 GB</td>
+          <td>CPU memory for offloading KV-cache blocks under memory pressure.</td>
+        </tr>
+        <tr>
+          <td><code>enable_prefix_caching</code></td>
+          <td>False</td>
+          <td>True (if shared prefix)</td>
+          <td>Caches KV-blocks for common prompt prefixes. Huge win for few-shot or system-prompt-heavy workloads.</td>
+        </tr>
+      </table>
+
+      <h3>Latency vs. Throughput Tradeoff</h3>
+
+      <p>For latency-sensitive applications (chatbots), reduce <code>max_num_seqs</code> to 16–64 and use <code>--block-size 16</code>. For throughput-heavy workloads (batch processing, RAG), increase <code>max_num_seqs</code> to 256+ and set <code>--block-size 32</code> or 64. Use the <code>--speculative-model</code> flag to enable speculative decoding for an additional 1.5–2x speedup on latency.</p>
+
+      <h3>Monitoring Performance</h3>
+
+      <p>Enable vLLM's built-in stats logging to understand what's happening under the hood:</p>
+
+<pre><code>$ python -m vllm.entrypoints.openai.api_server \
+    --model meta-llama/Meta-Llama-3.1-8B-Instruct \
+    --disable-log-requests \
+    --enable-prefix-caching \
+    2>&1 | grep "avg prompt throughput"</code></pre>
+
+      <p>The logs emit per-iteration metrics including average prompt throughput, generation throughput, number of running sequences, and GPU cache usage. Pipe these to a monitoring system like Prometheus for trend analysis.</p>
+
+      <h2 id="production">Production Deployment</h2>
+
+      <h3>Docker Compose Setup</h3>
+
+      <p>A production-ready Docker Compose configuration with health checks and auto-restart:</p>
+
+<pre><code>version: "3.9"
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: vllm-server
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - HF_TOKEN=${HF_TOKEN}    # for gated models
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    command:
+      - "--model"
+      - "mistralai/Mistral-7B-Instruct-v0.3"
+      - "--tensor-parallel-size"
+      - "2"
+      - "--gpu-memory-utilization"
+      - "0.92"
+      - "--max-model-len"
+      - "16384"
+      - "--max-num-seqs"
+      - "256"
+      - "--enable-prefix-caching"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 2
+              capabilities: [gpu]
+    healthcheck:
+      test: curl -f http://localhost:8000/health || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3</code></pre>
+
+      <h3>Multi-GPU and Multi-Node</h3>
+
+      <p>vLLM supports both single-node multi-GPU (tensor parallelism) and multi-node (pipeline parallelism + tensor parallelism). For multi-node, set the <code>VLLM_HOST</code> and <code>VLLM_PORT</code> environment variables and launch with <code>--pipeline-parallel-size N</code>. vLLM uses NCCL for inter-node communication and automatically discovers peers via a shared filesystem or environment variables.</p>
+
+      <h3>Monitoring with Prometheus</h3>
+
+      <p>vLLM exposes Prometheus metrics at <code>/metrics</code> on the API server. Key metrics to track:</p>
+      <ul>
+        <li><code>vllm:num_requests_running</code> — currently active requests</li>
+        <li><code>vllm:num_requests_waiting</code> — queued requests</li>
+        <li><code>vllm:gpu_cache_usage_perc</code> — KV-cache memory utilization</li>
+        <li><code>vllm:avg_generation_throughput_toks_per_s</code> — tokens generated per second</li>
+        <li><code>vllm:time_to_first_token_seconds</code> — TTFT histogram</li>
+      </ul>
+
+      <p>Point Prometheus to <code>http://<vllm-host>:8000/metrics</code>, then visualize with Grafana. Set alerts for <code>gpu_cache_usage_perc > 95%</code> and <code>num_requests_waiting > 100</code> to know when to scale up.</p>
+
+      <h3>Hugging Face Token for Gated Models</h3>
+
+      <p>Many popular models (Llama 3, Gemma, Mistral Large) require authentication. Log in to Hugging Face, generate a token at <a href="https://huggingface.co/settings/tokens">hf.co/settings/tokens</a>, and pass it via:</p>
+
+<pre><code>$ export HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxx
+$ python -m vllm.entrypoints.openai.api_server \
+    --model meta-llama/Meta-Llama-3.1-70B-Instruct \
+    --trust-remote-code</code></pre>
+
+      <p>In Docker, pass <code>HF_TOKEN</code> as an environment variable. vLLM will use it to authenticate with Hugging Face when downloading model weights.</p>
+
+      <h2 id="comparison">vLLM vs. Alternatives</h2>
+
+      <p>The table below compares vLLM against the most popular LLM serving frameworks. Benchmarks are approximate and based on an A100-80GB with Llama 3.1-8B at batch size 32.</p>
+
+      <table class="table">
+        <tr>
+          <th>Feature</th>
+          <th>vLLM</th>
+          <th>Ollama</th>
+          <th>llama.cpp</th>
+          <th>TGI (HF)</th>
+        </tr>
+        <tr>
+          <td><strong>Architecture</strong></td>
+          <td>PagedAttention</td>
+          <td>llama.cpp backend</td>
+          <td>ggml CPU/GPU</td>
+          <td>FlashAttention-2</td>
+        </tr>
+        <tr>
+          <td><strong>Continuous Batching</strong></td>
+          <td>Yes</td>
+          <td>No (request-level)</td>
+          <td>No (request-level)</td>
+          <td>Yes</td>
+        </tr>
+        <tr>
+          <td><strong>Quantization</strong></td>
+          <td>AWQ, GPTQ, FP8</td>
+          <td>GGUF (2–8 bit)</td>
+          <td>GGUF (2–8 bit)</td>
+          <td>AWQ, GPTQ, FP8, bitsandbytes</td>
+        </tr>
+        <tr>
+          <td><strong>Tensor Parallelism</strong></td>
+          <td>Yes (multi-GPU)</td>
+          <td>No</td>
+          <td>No (single GPU only)</td>
+          <td>Yes</td>
+        </tr>
+        <tr>
+          <td><strong>OpenAI-Compatible API</strong></td>
+          <td>Built-in</td>
+          <td>Built-in</td>
+          <td>Via server binary</td>
+          <td>Built-in</td>
+        </tr>
+        <tr>
+          <td><strong>LoRA Adapters</strong></td>
+          <td>Yes (hot-swap)</td>
+          <td>Modelfiles</td>
+          <td>GGUF LoRA</td>
+          <td>PEFT (static)</td>
+        </tr>
+        <tr>
+          <td><strong>Prefix Caching</strong></td>
+          <td>Yes</td>
+          <td>No</td>
+          <td>No</td>
+          <td>Yes</td>
+        </tr>
+        <tr>
+          <td><strong>Speculative Decoding</strong></td>
+          <td>Yes</td>
+          <td>No</td>
+          <td>No</td>
+          <td>Yes</td>
+        </tr>
+        <tr>
+          <td><strong>Max Throughput (tokens/s)</strong></td>
+          <td>~5200</td>
+          <td>~2100</td>
+          <td>~1800</td>
+          <td>~4700</td>
+        </tr>
+        <tr>
+          <td><strong>Time-to-First-Token (p50)</strong></td>
+          <td>~45ms</td>
+          <td>~85ms</td>
+          <td>~110ms</td>
+          <td>~55ms</td>
+        </tr>
+        <tr>
+          <td><strong>License</strong></td>
+          <td>Apache 2.0</td>
+          <td>MIT</td>
+          <td>MIT</td>
+          <td>Apache 2.0</td>
+        </tr>
+      </table>
+
+      <div class="note">
+        <strong>When to choose what:</strong> vLLM is the best option when you need maximum throughput, multi-GPU support, or production-grade serving with metrics and hot-swappable LoRA adapters. Ollama and llama.cpp are better suited for local development, CPU inference, or single-user setups where ease of installation matters more than raw throughput. TGI is the closest competitor to vLLM but currently lags in KV-cache efficiency and continuous batching flexibility.
+      </div>
+
+      <h2 id="troubleshooting">Troubleshooting</h2>
+
+      <h3>CUDA Out of Memory</h3>
+      <p>If vLLM crashes with a CUDA OOM error, reduce <code>gpu_memory_utilization</code> (try 0.80) or lower <code>max_model_len</code>. The model weights + KV-cache must fit entirely in GPU memory. Use <code>nvidia-smi</code> to check available memory before launching.</p>
+
+      <h3>Model Not Found</h3>
+      <p>Ensure the model name matches the Hugging Face repository exactly. For gated models, set the <code>HF_TOKEN</code> environment variable. If you're behind a proxy, configure <code>HF_ENDPOINT</code> or <code>http_proxy</code>/<code>https_proxy</code>.</p>
+
+      <h3>Slow First Request</h3>
+      <p>The first request after server start is slow because the model weights are being loaded and CUDA kernels are being compiled. Use <code>--enforce-eager</code> to skip CUDA graph optimization (faster startup, slightly slower throughput) or pre-compile with the Docker image.</p>
+
+      <h3>Tokenization Errors</h3>
+      <p>If you see mismatched tokenizer errors, pass <code>--tokenizer-mode auto</code> (default) and ensure the tokenizer is compatible with the model config. For <code>trust_remote_code</code> models, add <code>--trust-remote-code</code>.</p>
+
+      <h3>NCCL Timeout on Multi-GPU</h3>
+      <p>Set <code>NCCL_TIMEOUT=600</code> and <code>NCCL_SHM_DISABLE=0</code> to avoid initialization timeouts on systems with slow interconnects. For multi-node, ensure all nodes can communicate on the same network with <code>NCCL_IB_DISABLE=1</code> as a fallback for non-Infiniband setups.</p>
+
     </div>
   </div>
 </article>

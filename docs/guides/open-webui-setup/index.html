@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Open WebUI Setup — LocalAI Lab</title>
-<meta name="description" content="Your local ChatGPT alternative. Install with Ollama, user management, RAG, model switching.">
+<meta name="description" content="Complete Open WebUI setup guide. Install with Docker, connect to Ollama, enable RAG, manage users, and deploy in production. Your local ChatGPT.">
 <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
@@ -25,20 +25,428 @@
       <h1>Open WebUI Setup</h1>
       <div class="meta"><span>12 min read</span><span>Updated May 2026</span></div>
     </div>
+
+    <div class="toc">
+      <h2>Table of Contents</h2>
+      <ol>
+        <li><a href="#what-is-open-webui">What Is Open WebUI?</a></li>
+        <li><a href="#prerequisites">Prerequisites</a></li>
+        <li><a href="#installation">Installation Methods</a></li>
+        <li><a href="#first-run">First Run &amp; Connecting to Ollama</a></li>
+        <li><a href="#rag-integration">RAG Integration</a></li>
+        <li><a href="#user-management">User Management</a></li>
+        <li><a href="#customization">Customization</a></li>
+        <li><a href="#production">Production Deployment</a></li>
+        <li><a href="#troubleshooting">Troubleshooting</a></li>
+      </ol>
+    </div>
+
     <div class="guide-content">
-      <p><em>This guide is being written. Full content coming soon — subscribe to the newsletter to get notified.</em></p>
-      <p>Your local ChatGPT alternative. Install with Ollama, user management, RAG, model switching.</p>
-      <p>In the meantime, check out our <a href="/guides/ollama-complete-guide/">Ollama Complete Guide</a> or the <a href="/guides/local-llm-linux/">Local LLM on Linux</a> guide for related content.</p>
+
+      <section id="what-is-open-webui">
+        <h2>What Is Open WebUI?</h2>
+        <p>Open WebUI is a self-hosted, feature-rich chat interface designed to work seamlessly with Ollama and other OpenAI-compatible backends. Think of it as your own local ChatGPT — a polished web UI that runs entirely on your hardware, with no data leaving your network. It supports markdown rendering, syntax-highlighted code blocks, conversation branching, RAG (Retrieval-Augmented Generation), multi-model conversations, voice input, and a full administrative dashboard for managing users, models, and permissions.</p>
+
+        <div class="note">
+          <strong>Why Open WebUI?</strong> Unlike hosted solutions, Open WebUI keeps your conversations and documents completely private. You control the backend models, the storage, and who has access. It is the most popular open-source frontend for Ollama, with over 50,000 GitHub stars and an active community.
+        </div>
+
+        <p>Open WebUI replaces the need for standalone solutions like Ollama Web UI, LocalAI WebUI, or proprietary services. It provides a consistent experience whether you are running a single model on a laptop or a multi-user deployment on a server with dozens of models.</p>
+      </section>
+
+      <section id="prerequisites">
+        <h2>Prerequisites</h2>
+        <p>Before installing Open WebUI, make sure your system meets these requirements:</p>
+
+        <ul>
+          <li><strong>Docker</strong> (recommended) — Install <a href="https://docs.docker.com/engine/install/" target="_blank" rel="noopener">Docker Engine</a> (Linux) or <a href="https://docs.docker.com/desktop/" target="_blank" rel="noopener">Docker Desktop</a> (macOS/Windows).</li>
+          <li><strong>Ollama</strong> — A running instance of <a href="https://ollama.ai" target="_blank" rel="noopener">Ollama</a> with at least one model pulled (e.g. <code>llama3.2</code>, <code>mistral</code>, or <code>phi3</code>).</li>
+          <li><strong>Hardware</strong> — 2 GB RAM minimum (8 GB+ recommended for multi-user use). At least 10 GB free disk space for models and document storage.</li>
+          <li><strong>Port availability</strong> — Port 3000 (default Open WebUI port) must be free, or you will need to map a different port.</li>
+        </ul>
+
+        <p>If you do not already have Ollama installed, here is the quick start:</p>
+
+        <pre><code># Install Ollama (Linux/macOS)
+curl -fsSL https://ollama.ai/install.sh | sh
+
+# Pull a model
+ollama pull llama3.2
+
+# Verify it is running
+ollama list
+</code></pre>
+      </section>
+
+      <section id="installation">
+        <h2>Installation Methods</h2>
+        <p>There are three main ways to install Open WebUI. The Docker method is by far the simplest and most reliable for most users.</p>
+
+        <h3>Method 1: Docker (Recommended)</h3>
+        <p>Run Open WebUI with a single command. Docker handles all dependencies, Python virtual environments, and persistent storage automatically.</p>
+
+        <pre><code>docker run -d \
+  --name open-webui \
+  --restart unless-stopped \
+  -p 3000:8080 \
+  -v open-webui-data:/app/backend/data \
+  --network=host \
+  ghcr.io/open-webui/open-webui:main
+</code></pre>
+
+        <div class="note">
+          <strong>Note on --network=host:</strong> This flag allows the container to reach Ollama running on <code>localhost:11434</code>. If you prefer bridge networking, use <code>-e OLLAMA_BASE_URL=http://host.docker.internal:11434</code> instead (macOS/Windows) or your host IP (Linux).
+        </div>
+
+        <p>Once started, open <a href="http://localhost:3000" target="_blank" rel="noopener">http://localhost:3000</a> in your browser. The first user you create automatically becomes the admin.</p>
+
+        <h3>Method 2: pip Install (Python)</h3>
+        <p>If you prefer to run Open WebUI without Docker, you can install it directly via pip. This requires Python 3.11 or later.</p>
+
+        <pre><code># Create a virtual environment (recommended)
+python -m venv open-webui-env
+source open-webui-env/bin/activate
+
+# Install Open WebUI
+pip install open-webui
+
+# Start the server
+open-webui serve
+</code></pre>
+
+        <p>By default, the server listens on <code>0.0.0.0:8080</code>. You can change the port with the <code>--port</code> flag. This method gives you more control over the process and integrates easily with systemd or supervisor for production use.</p>
+
+        <h3>Method 3: Manual Setup from Source</h3>
+        <p>Advanced users can clone the repository and run the frontend and backend separately. This is useful for development or customization.</p>
+
+        <pre><code>git clone https://github.com/open-webui/open-webui.git
+cd open-webui
+
+# Backend
+cd backend
+pip install -r requirements.txt
+python main.py &
+
+# Frontend (in a separate terminal)
+cd ../frontend
+npm install
+npm run dev
+</code></pre>
+
+        <p>The manual approach is best if you plan to modify the UI, contribute to the project, or integrate custom authentication backends.</p>
+      </section>
+
+      <section id="first-run">
+        <h2>First Run &amp; Connecting to Ollama</h2>
+        <p>When you first load Open WebUI in your browser, you will see a login/signup screen. Register your first account — this user will be granted admin privileges automatically.</p>
+
+        <h3>Connecting to Ollama</h3>
+        <p>By default, Open WebUI looks for Ollama at <code>http://localhost:11434</code>. If Ollama is running on a different host or port, navigate to <strong>Admin Panel &rarr; Settings &rarr; Connections</strong> and update the <strong>Ollama Base URL</strong> field. For example:</p>
+
+        <ul>
+          <li>Remote server: <code>http://192.168.1.100:11434</code></li>
+          <li>Docker host (Linux with bridge): <code>http://172.17.0.1:11434</code></li>
+          <li>Docker host (macOS/Windows): <code>http://host.docker.internal:11434</code></li>
+        </ul>
+
+        <h3>Selecting Models</h3>
+        <p>Once connected, Open WebUI automatically fetches the list of available models from Ollama. You will see them in the model selector dropdown at the top of the chat interface. You can also pull new models directly from the Open WebUI admin panel without touching the terminal — just enter the model name (e.g. <code>mistral:7b</code>) and click <strong>Pull</strong>.</p>
+
+        <h3>The Chat Interface</h3>
+        <p>The main chat area supports:</p>
+        <ul>
+          <li><strong>Markdown rendering</strong> — Headers, lists, tables, bold, italic, and links all render inline.</li>
+          <li><strong>Code highlighting</strong> — Code blocks with language tags (e.g. <code>```python</code>) are highlighted using Prism.js.</li>
+          <li><strong>Conversation management</strong> — Rename, archive, delete, or export conversations from the sidebar. Conversations are searchable.</li>
+          <li><strong>Multi-model chats</strong> — Tag multiple models in a single conversation and switch between them mid-chat to compare responses.</li>
+          <li><strong>Voice input</strong> — Click the microphone icon to speak your prompts (requires browser microphone access).</li>
+        </ul>
+      </section>
+
+      <section id="rag-integration">
+        <h2>RAG Integration</h2>
+        <p>One of Open WebUI's most powerful features is built-in Retrieval-Augmented Generation. You can upload documents (PDF, TXT, Markdown, CSV, DOCX, and more) and ask questions about their content. The system uses embeddings to find relevant chunks and injects them into the model's context.</p>
+
+        <h3>How to Use RAG</h3>
+        <ol>
+          <li>Open a chat conversation.</li>
+          <li>Click the <strong>paperclip / attach</strong> icon next to the message input.</li>
+          <li>Upload one or more documents (up to 100 MB total per upload).</li>
+          <li>Type your question about the document contents and press Enter.</li>
+          <li>Open WebUI splits the document into chunks, generates embeddings, and retrieves the most relevant sections to augment the model's response.</li>
+        </ol>
+
+        <h3>RAG Configuration</h3>
+        <p>You can fine-tune RAG behavior in <strong>Admin Panel &rarr; Settings &rarr; Documents</strong>:</p>
+
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Setting</th>
+              <th>Default</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Chunk Size</td>
+              <td>1000</td>
+              <td>Number of characters per document chunk. Smaller chunks increase precision but require more embedding calls.</td>
+            </tr>
+            <tr>
+              <td>Chunk Overlap</td>
+              <td>200</td>
+              <td>Characters of overlap between consecutive chunks to preserve context at boundaries.</td>
+            </tr>
+            <tr>
+              <td>Top K Results</td>
+              <td>3</td>
+              <td>Number of chunks to retrieve and include in the prompt for each query.</td>
+            </tr>
+            <tr>
+              <td>Embedding Model</td>
+              <td>sentence-transformers/all-MiniLM-L6-v2</td>
+              <td>Model used to generate embeddings. Can be changed to any Hugging Face sentence-transformers model.</td>
+            </tr>
+            <tr>
+              <td>Similarity Threshold</td>
+              <td>0.0</td>
+              <td>Minimum cosine similarity score for a chunk to be included. Set higher (e.g. 0.5) to filter out weak matches.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <strong>Performance tip:</strong> For large document collections, switch to a dedicated embedding service like Ollama's <code>nomic-embed-text</code> model or configure an external OpenAI-compatible embeddings API. This reduces memory usage on the Open WebUI server.
+        </div>
+
+        <p>RAG makes Open WebUI an excellent tool for querying internal documentation, research papers, legal contracts, or any collection of private documents. All processing happens locally — no data ever leaves your network.</p>
+      </section>
+
+      <section id="user-management">
+        <h2>User Management</h2>
+        <p>Open WebUI includes a full administrative dashboard for managing users, roles, and permissions. Navigate to <strong>Admin Panel &rarr; Users</strong> to access these features.</p>
+
+        <h3>User Roles</h3>
+        <p>There are three built-in roles:</p>
+        <ul>
+          <li><strong>Admin</strong> — Full access to all settings, models, user management, and system configuration.</li>
+          <li><strong>User</strong> — Can chat, upload documents, manage their own conversations, and use RAG.</li>
+          <li><strong>Viewer</strong> — Read-only access. Can view conversations and documents but cannot send messages or upload files.</li>
+        </ul>
+
+        <h3>Permission Groups</h3>
+        <p>You can create custom permission groups to control which models, tools, and features each group can access. For example, you might create a <strong>research</strong> group with access to large reasoning models and a <strong>general</strong> group limited to small, fast models. Groups can be assigned during user creation or edited later.</p>
+
+        <h3>Email &amp; OAuth</h3>
+        <p>Open WebUI supports email-based registration (with SMTP configuration) and OAuth providers including Google, GitHub, Microsoft, and generic OpenID Connect. Configure these in <strong>Admin Panel &rarr; Settings &rarr; Authentication</strong>. For self-hosted teams, OAuth integration means users can sign in with their existing organizational accounts.</p>
+      </section>
+
+      <section id="customization">
+        <h2>Customization</h2>
+        <p>Open WebUI offers extensive customization options to tailor the experience to your needs.</p>
+
+        <h3>Themes</h3>
+        <p>Switch between light, dark, and system-follow themes from the user settings menu. You can also set a custom accent color and toggle between compact and comfortable spacing. For power users, custom CSS can be injected via the admin panel to override any visual element.</p>
+
+        <h3>System Prompts</h3>
+        <p>Define default system prompts that set the tone and behavior of models. For example, you can create a "Support Agent" persona that always responds politely and asks clarifying questions. System prompts can be set globally (affecting all users) or per-user by admins.</p>
+
+        <h3>Model Parameters</h3>
+        <p>Each model's parameters — temperature, top-p, top-k, max tokens, frequency penalty, presence penalty, and stop sequences — are fully configurable from the chat interface. Click the gear icon next to the model selector to adjust these on the fly. Saved presets let you quickly switch between "creative" (high temperature) and "precise" (low temperature) configurations.</p>
+
+        <h3>Tools &amp; Plugins</h3>
+        <p>Open WebUI supports a growing ecosystem of tools and function plugins. These include web search, code execution (sandboxed), image generation, calculator, and custom API integrations. Tools can be enabled, disabled, and configured from the admin panel. Users can also create their own custom function tools using JavaScript directly in the UI.</p>
+      </section>
+
+      <section id="production">
+        <h2>Production Deployment</h2>
+        <p>For a production deployment serving multiple users, you will want persistent storage, proper networking, a reverse proxy, and HTTPS.</p>
+
+        <h3>Docker Compose (Recommended for Production)</h3>
+        <p>Create a <code>docker-compose.yml</code> file for a complete stack with Open WebUI, Ollama, and persistent volumes:</p>
+
+        <pre><code>version: "3.8"
+services:
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "11434:11434"
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    restart: unless-stopped
+    ports:
+      - "3000:8080"
+    volumes:
+      - open-webui-data:/app/backend/data
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
+      - WEBUI_NAME=LocalAI Lab
+      - ENABLE_SIGNUP=false
+    depends_on:
+      - ollama
+
+volumes:
+  ollama-data:
+  open-webui-data:
+</code></pre>
+
+        <p>Set a strong <code>WEBUI_SECRET_KEY</code> environment variable. This is used to encrypt session tokens and sensitive configuration values. Generate one with <code>openssl rand -hex 32</code>.</p>
+
+        <h3>Reverse Proxy with Nginx</h3>
+        <p>Place Nginx in front of Open WebUI to handle SSL termination, rate limiting, and domain routing:</p>
+
+        <pre><code>server {
+    listen 80;
+    server_name chat.localailab.com;
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name chat.localailab.com;
+
+    ssl_certificate /etc/letsencrypt/live/chat.localailab.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/chat.localailab.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    location /ws {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 86400s;
+    }
+}
+</code></pre>
+
+        <h3>HTTPS with Let's Encrypt</h3>
+        <p>Obtain free SSL certificates using Certbot:</p>
+
+        <pre><code># Install Certbot (Ubuntu/Debian)
+sudo apt update && sudo apt install -y certbot python3-certbot-nginx
+
+# Obtain a certificate
+sudo certbot --nginx -d chat.localailab.com
+
+# Verify auto-renewal
+sudo certbot renew --dry-run
+</code></pre>
+
+        <h3>Important Environment Variables</h3>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Variable</th>
+              <th>Default</th>
+              <th>Purpose</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>WEBUI_SECRET_KEY</code></td>
+              <td>auto-generated</td>
+              <td>Encryption key for sessions and secrets. Set a fixed value for persistence across restarts.</td>
+            </tr>
+            <tr>
+              <td><code>WEBUI_NAME</code></td>
+              <td>"Open WebUI"</td>
+              <td>Display name shown in the browser tab and header.</td>
+            </tr>
+            <tr>
+              <td><code>ENABLE_SIGNUP</code></td>
+              <td>true</td>
+              <td>Set to <code>false</code> to disable public registration after your admin account is created.</td>
+            </tr>
+            <tr>
+              <td><code>OLLAMA_BASE_URL</code></td>
+              <td>http://localhost:11434</td>
+              <td>URL of the Ollama server.</td>
+            </tr>
+            <tr>
+              <td><code>DEFAULT_MODELS</code></td>
+              <td>null</td>
+              <td>Comma-separated list of models to show by default (e.g. <code>llama3.2,mistral</code>).</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="troubleshooting">
+        <h2>Troubleshooting</h2>
+
+        <h3>Cannot Connect to Ollama</h3>
+        <p>If Open WebUI shows "Connection refused" when trying to reach Ollama:</p>
+        <ul>
+          <li>Verify Ollama is running: <code>systemctl status ollama</code> or <code>ollama list</code>.</li>
+          <li>Check that Ollama is listening on all interfaces if running in a separate container: <code>OLLAMA_HOST=0.0.0.0 ollama serve</code>.</li>
+          <li>When using Docker, ensure <code>--network=host</code> or the correct <code>OLLAMA_BASE_URL</code> is set.</li>
+        </ul>
+
+        <h3>White Screen on Load</h3>
+        <p>A blank white screen usually indicates a frontend build issue or a JavaScript error. Open your browser's developer console (F12) and look for errors. Common causes include:</p>
+        <ul>
+          <li>Corrupted browser cache — try a hard refresh (Ctrl+Shift+R) or clear site data.</li>
+          <li>Outdated container — pull the latest image: <code>docker pull ghcr.io/open-webui/open-webui:main</code>.</li>
+          <li>Port conflict — another service may be using port 3000 or the mapped port.</li>
+        </ul>
+
+        <h3>Document Upload Fails</h3>
+        <p>If document uploads for RAG fail silently:</p>
+        <ul>
+          <li>Check available disk space — Open WebUI stores uploaded documents in its data volume.</li>
+          <li>Verify the file type is supported (PDF, TXT, MD, CSV, DOCX, EPUB, HTML).</li>
+          <li>Check the container logs: <code>docker logs open-webui --tail 50</code>.</li>
+        </ul>
+
+        <h3>High Memory Usage</h3>
+        <p>Open WebUI caches embeddings and conversation history in memory. For long-running deployments:</p>
+        <ul>
+          <li>Set <code>MAX_CONVERSATION_HISTORY</code> to a reasonable limit (e.g. 1000).</li>
+          <li>Use an external vector database (Chroma, Qdrant) instead of the default in-memory store for production RAG workloads.</li>
+          <li>Monitor memory usage with <code>docker stats open-webui</code> and adjust the container's memory limit in Docker Compose.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Next Steps</h2>
+        <p>Now that Open WebUI is up and running, here are some things you can explore:</p>
+        <ul>
+          <li>Experiment with different Ollama models and compare their outputs side-by-side.</li>
+          <li>Set up a shared knowledge base by uploading company documentation and enabling RAG for all users.</li>
+          <li>Configure OAuth to let your team sign in with their existing Google or GitHub accounts.</li>
+          <li>Write custom function tools to integrate with your internal APIs.</li>
+          <li>Explore the <a href="https://github.com/open-webui/open-webui" target="_blank" rel="noopener">Open WebUI GitHub repository</a> for the latest features and community plugins.</li>
+        </ul>
+        <p>Open WebUI transforms a bare Ollama installation into a polished, production-ready AI assistant platform. Whether you are running it on a single Raspberry Pi or a multi-GPU server, it scales with your needs and keeps your data entirely under your control.</p>
+      </section>
+
     </div>
   </div>
 </article>
+
 <footer class="footer">
-  <div class="container footer-inner">
-    <span>&copy; 2026 LocalAI Lab.</span>
-    <div class="footer-links">
-      <a href="/guides/">Guides</a>
-      <a href="/newsletter/">Newsletter</a>
-    </div>
+  <div class="container">
+    <p>&copy; 2026 <a href="/">LocalAI Lab</a> &mdash; Self-hosted AI tutorials for the DIY community.</p>
+    <p><a href="/guides/">Guides</a> &middot; <a href="/tools/">Tools</a> &middot; <a href="/newsletter/">Newsletter</a></p>
   </div>
 </footer>
 </body>

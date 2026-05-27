@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ollama: The Complete Guide — LocalAI Lab</title>
+<meta name="description" content="Complete Ollama guide: installation, model management, custom Modelfiles, OpenAI-compatible API, and production deployment tips. All commands tested on Linux.">
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<header class="header">
+  <div class="container header-inner">
+    <a href="/" class="logo">~/localai-lab</a>
+    <nav class="nav">
+      <a href="/guides/">Guides</a>
+      <a href="/tools/">Tools</a>
+      <a href="/newsletter/">Newsletter</a>
+      <a href="https://github.com/localai-lab" target="_blank">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<article class="guide-page">
+  <div class="container">
+    <div class="guide-header">
+      <span class="tag tag-beginner" style="display:inline-block;font-size:0.8rem;padding:4px 12px;border-radius:20px;margin-bottom:16px;">beginner</span>
+      <h1>Ollama: The Complete Guide</h1>
+      <div class="meta">
+        <span>15 min read</span>
+        <span>Updated May 2026</span>
+      </div>
+    </div>
+    
+    <div class="toc">
+      <h3>Table of Contents</h3>
+      <ol>
+        <li><a href="#what-is-ollama">What is Ollama?</a></li>
+        <li><a href="#installation">Installation</a></li>
+        <li><a href="#first-model">Running Your First Model</a></li>
+        <li><a href="#model-management">Model Management</a></li>
+        <li><a href="#custom-modelfiles">Custom Modelfiles</a></li>
+        <li><a href="#api">OpenAI-Compatible API</a></li>
+        <li><a href="#multiple-models">Running Multiple Models</a></li>
+        <li><a href="#gpu">GPU Acceleration</a></li>
+        <li><a href="#production">Production Considerations</a></li>
+        <li><a href="#troubleshooting">Troubleshooting</a></li>
+      </ol>
+    </div>
+
+    <div class="guide-content">
+      <h2 id="what-is-ollama">What is Ollama?</h2>
+      <p>Ollama is the simplest way to run large language models locally. It wraps llama.cpp under the hood, providing a clean CLI and an OpenAI-compatible API server. Think of it as Docker for LLMs — you pull a model by name and run it with one command.</p>
+      
+      <div class="note">
+        <p><strong>Why Ollama?</strong> If you're new to local LLMs, start here. It handles model downloading, quantization, GPU detection, and API serving automatically. You can go from zero to a running model in under 2 minutes.</p>
+      </div>
+
+      <h2 id="installation">Installation</h2>
+      <p>The one-liner install script handles everything:</p>
+      <pre><code>curl -fsSL https://ollama.com/install.sh | sh</code></pre>
+
+      <p>After installation, verify it's running:</p>
+      <pre><code>$ ollama --version
+ollama version 0.5.12
+
+$ systemctl status ollama
+● ollama.service - Ollama Service
+     Loaded: loaded (/etc/systemd/system/ollama.service; enabled; preset: enabled)
+     Active: active (running) since Mon 2026-05-25 10:30:42 UTC
+   Main PID: 3742 (ollama)
+     Tasks: 18
+     Memory: 89.2M
+     CPU: 1.234s
+     CGroup: /system.slice/ollama.service
+             └─3742 /usr/local/bin/ollama serve</code></pre>
+
+      <p>Ollama runs as a systemd service by default, making it available at <code>http://localhost:11434</code>. If you want to run it manually, or need a <a href="https://m.do.co/c/your-referral-code" target="_blank" rel="noopener">cloud server with GPU</a> for training and experimentation:</p>
+      <pre><code>ollama serve
+# Logs: 2026/05/25 10:31:12 server.go:108: Listening on 127.0.0.1:11434</code></pre>
+
+      <h3>Docker Installation</h3>
+      <p>Prefer containers? Ollama has an official Docker image:</p>
+      <pre><code>docker run -d --name ollama \
+  -v ollama:/root/.ollama \
+  -p 11434:11434 \
+  --gpus all \
+  ollama/ollama</code></pre>
+
+      <h2 id="first-model">Running Your First Model</h2>
+      <p>Let's pull and run Mistral, a solid 7B parameter model that runs on most hardware:</p>
+      <pre><code>$ ollama pull mistral
+pulling manifest
+pulling 61e6e3b2c8cb... 100% ████████████████████████ 4.1 GB/4.1 GB
+pulling e8a35b5937b7... 100% ████████████████████████ 8.0 KB/8.0 KB
+pulling 6457a1f6025d... 100% ████████████████████████ 112 B/112 B
+verifying sha256 digest
+writing manifest
+removing any unused layers
+success</code></pre>
+
+      <p>Now run it interactively:</p>
+      <pre><code>$ ollama run mistral
+>>> Write a Python function to check if a number is prime.
+
+Here's a simple implementation:
+
+def is_prime(n):
+    if n < 2:
+        return False
+    for i in range(2, int(n ** 0.5) + 1):
+        if n % i == 0:
+            return False
+    return True
+
+The function handles edge cases (n < 2) and only checks divisors up to √n for efficiency.
+
+>>> /exit</code></pre>
+
+      <p>That's it. You just ran a 7B parameter LLM on your local machine.</p>
+
+      <h2 id="model-management">Model Management</h2>
+      <p>List all downloaded models:</p>
+      <pre><code>$ ollama list
+NAME                      ID              SIZE      MODIFIED
+mistral:latest            61e6e3b2c8cb    4.1 GB    2 days ago
+llama3.2:3b               2662b4f2ac4b    2.0 GB    5 days ago
+llama3.1:8b               46e0c10c039e    4.7 GB    7 days ago
+nomic-embed-text:latest   0a109f422b47    274 MB    3 days ago
+codellama:7b              8fdf8f7adf5c    3.8 GB    6 hours ago</code></pre>
+
+      <p>Remove models you no longer need:</p>
+      <pre><code>ollama rm codellama:7b</code></pre>
+
+      <p>Show a model's details:</p>
+      <pre><code>$ ollama show mistral
+  Model
+    architecture        mistral
+    parameters          7.2B
+    quantization        Q4_K_M
+    context length      32768
+    embedding length    4096
+
+  Parameters
+    stop                "<|end_of_text|>"
+    temperature         0.7
+
+  License
+    Apache 2.0</code></pre>
+
+      <h2 id="custom-modelfiles">Custom Modelfiles</h2>
+      <p>Modelfiles are Ollama's equivalent of a Dockerfile — they let you customize a model's behavior, system prompt, temperature, and more.</p>
+
+      <p>Create a Modelfile for a coding assistant:</p>
+      <pre><code>FROM codellama:7b
+
+# Set parameters
+PARAMETER temperature 0.2
+PARAMETER top_p 0.9
+PARAMETER stop "</s>"
+
+# Custom system prompt
+SYSTEM """You are an expert software engineer. Write clean, well-documented code.
+Always explain your reasoning before showing code. Prefer Python unless asked otherwise.
+If there are multiple valid approaches, mention the tradeoffs briefly."""
+
+# Add custom template
+TEMPLATE """{{ .System }}
+
+User: {{ .Prompt }}
+
+Assistant: Let me think through this carefully.
+"""</code></pre>
+
+      <p>Build and run it:</p>
+      <pre><code>ollama create code-assistant -f Modelfile
+ollama run code-assistant</code></pre>
+
+      <h3>Useful Parameter Combinations</h3>
+      <table>
+        <tr><th>Use Case</th><th>Temperature</th><th>Top-P</th><th>Top-K</th></tr>
+        <tr><td>Code generation</td><td>0.1 - 0.2</td><td>0.9</td><td>40</td></tr>
+        <tr><td>Creative writing</td><td>0.7 - 0.9</td><td>0.95</td><td>60</td></tr>
+        <tr><td>Factual Q&A</td><td>0.3 - 0.5</td><td>0.8</td><td>40</td></tr>
+        <tr><td>Brainstorming</td><td>0.8 - 1.0</td><td>1.0</td><td>100</td></tr>
+      </table>
+
+      <h2 id="api">OpenAI-Compatible API</h2>
+      <p>Ollama exposes an API that's compatible with the OpenAI format, so you can use any OpenAI client library with a local model.</p>
+
+      <p>Basic chat completion:</p>
+      <pre><code>curl http://localhost:11434/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mistral",
+    "messages": [
+      {"role": "user", "content": "What is the derivative of sin(x)?"}
+    ],
+    "temperature": 0.3
+  }'</code></pre>
+
+      <p>Response:</p>
+      <pre><code>{
+  "id": "chatcmpl-abc123",
+  "object": "chat.completion",
+  "created": 1748219200,
+  "model": "mistral",
+  "choices": [{
+    "index": 0,
+    "message": {
+      "role": "assistant",
+      "content": "The derivative of sin(x) is cos(x).\n\nThis is one of the fundamental derivatives in calculus. Using the limit definition:\n\nd/dx sin(x) = lim[h→0] (sin(x+h) - sin(x))/h\n             = cos(x)"
+    },
+    "finish_reason": "stop"
+  }],
+  "usage": {
+    "prompt_tokens": 36,
+    "completion_tokens": 58,
+    "total_tokens": 94
+  }
+}</code></pre>
+
+      <p>You can use any OpenAI SDK — just change the base URL:</p>
+      <pre><code>from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:11434/v1",
+    api_key="ollama"  # Ollama doesn't require an API key
+)
+
+response = client.chat.completions.create(
+    model="mistral",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+print(response.choices[0].message.content)</code></pre>
+
+      <h2 id="multiple-models">Running Multiple Models</h2>
+      <p>Ollama keeps models loaded in memory until they're evicted. You can run different models for different tasks without restarting:</p>
+      <pre><code># In terminal 1: general chat
+ollama run llama3.1:8b
+
+# In terminal 2: code generation
+ollama run codellama:7b
+
+# In terminal 3: embeddings
+curl http://localhost:11434/api/embeddings \
+  -d '{"model": "nomic-embed-text", "prompt": "Hello world"}'</code></pre>
+
+      <p>To see which models are currently loaded in memory:</p>
+      <pre><code>$ ollama ps
+NAME              ID              SIZE   PROCESSOR    UNTIL
+llama3.1:8b       46e0c10c039e    5.5 GB 100% CPU     4 minutes from now
+mistral:latest    61e6e3b2c8cb    4.1 GB 100% CPU     5 minutes from now</code></pre>
+
+      <p>Models are automatically unloaded after 5 minutes of inactivity. You can adjust this with the <code>OLLAMA_KEEP_ALIVE</code> environment variable (set to <code>0</code> to never keep models loaded, or <code>24h</code> to keep them loaded permanently).</p>
+
+      <h2 id="gpu">GPU Acceleration</h2>
+      <p>Ollama automatically detects and uses NVIDIA GPUs with CUDA. To check if GPU acceleration is working:</p>
+      <pre><code>$ ollama run mistral
+>>> Tell me if I'm running on GPU right now.
+
+Yes! I can confirm I'm running on GPU. Ollama detected your NVIDIA GPU
+and loaded the model with CUDA acceleration. You can verify this by
+checking GPU utilization while I'm running:
+
+$ nvidia-smi
+Mon May 25 10:35:22 2026
++------------------------------------------------------+
+| NVIDIA-SMI 555.42.06    Driver Version: 555.42.06    |
++------------------------------------------------------+
+| GPU  Name        Persistence-M| Bus-Id        Disp.A |
+|    0  RTX 4090              On | 00000000:01:00.0  On |
++------------------------------------------------------+
+| 30%   48C    P0    185W / 450W |  7234MiB / 24564MiB |
++------------------------------------------------------+
+
+>>> /exit</code></pre>
+
+      <p>For AMD GPUs (ROCm) or Intel GPUs (oneAPI), install the Ollama ROCm or Intel-specific packages:</p>
+      <pre><code># AMD GPU
+curl -fsSL https://ollama.com/install.sh | OLLAMA_ROCM=1 sh
+
+# Intel GPU
+curl -fsSL https://ollama.com/install.sh | OLLAMA_INTEL_GPU=1 sh</code></pre>
+
+      <div class="note">
+        <p><strong>CPU only?</strong> You can still run 7B models comfortably on a modern CPU with 16GB+ RAM. Expect 2-5 tokens/second on a modern CPU versus 40-80 tokens/second on an RTX 4090.</p>
+      </div>
+
+      <h2 id="production">Production Considerations</h2>
+      <p>When running Ollama in production or as a service:</p>
+
+      <h3>Environment Variables</h3>
+      <pre><code># Increase context window (default: 2048)
+OLLAMA_CONTEXT_LENGTH=8192
+
+# Keep models loaded for 1 hour
+OLLAMA_KEEP_ALIVE=1h
+
+# Limit concurrent requests
+OLLAMA_NUM_PARALLEL=4
+
+# Maximum queue size (beyond this, requests return 503)
+OLLAMA_MAX_QUEUE=512
+
+# Host on all interfaces (for containers)
+OLLAMA_HOST=0.0.0.0:11434
+
+# Set batch size for prompt processing (higher = faster, more memory)
+OLLAMA_NUM_BATCH=512</code></pre>
+
+      <h3>Systemd Configuration</h3>
+      <p>Override the service file to set environment variables:</p>
+      <pre><code>sudo mkdir -p /etc/systemd/system/ollama.service.d
+
+cat > /etc/systemd/system/ollama.service.d/override.conf << 'EOF'
+[Service]
+Environment="OLLAMA_CONTEXT_LENGTH=8192"
+Environment="OLLAMA_KEEP_ALIVE=1h"
+Environment="OLLAMA_NUM_PARALLEL=4"
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl restart ollama</code></pre>
+
+      <h3>Reverse Proxy (Nginx)</h3>
+      <pre><code>server {
+    listen 80;
+    server_name ollama.yourdomain.com;
+
+    client_max_body_size 100M;
+
+    location / {
+        proxy_pass http://127.0.0.1:11434;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 300s;
+    }
+}</code></pre>
+
+      <h2 id="troubleshooting">Troubleshooting</h2>
+
+      <h3>Model Won't Load (OOM)</h3>
+      <p>Your model is too large for your available memory. Solutions:</p>
+      <ul>
+        <li>Use a smaller quant: <code>ollama pull mistral:q3_k_s</code> instead of the default Q4</li>
+        <li>Use a smaller model: try <code>llama3.2:3b</code> (2GB) instead of <code>llama3.1:8b</code> (4.7GB)</li>
+        <li>Close other applications to free RAM</li>
+      </ul>
+
+      <h3>Slow Response Times</h3>
+      <ul>
+        <li>Check if GPU is being utilized: <code>ollama ps</code> should show <code>GPU</code> in the Processor column</li>
+        <li>Reduce context length: <code>OLLAMA_CONTEXT_LENGTH=4096</code></li>
+        <li>Increase batch size: <code>OLLAMA_NUM_BATCH=1024</code></li>
+      </ul>
+
+      <h3>API Returns 503</h3>
+      <p>The request queue is full. Increase max queue size or reduce concurrent requests:</p>
+      <pre><code>export OLLAMA_MAX_QUEUE=512
+export OLLAMA_NUM_PARALLEL=4</code></pre>
+
+      <h3>Connection Refused</h3>
+      <p>Ollama may not be running. Check with <code>systemctl status ollama</code> and start it if needed:</p>
+      <pre><code>sudo systemctl start ollama</code></pre>
+    </div>
+  </div>
+</article>
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <span>&copy; 2026 LocalAI Lab.</span>
+    <div class="footer-links">
+      <a href="/guides/">Guides</a>
+      <a href="/newsletter/">Newsletter</a>
+    </div>
+  </div>
+</footer>
+</body>
+</html>
