@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Run LLMs Locally on Linux — LocalAI Lab</title>
+<meta name="description" content="Complete guide to running LLMs on Linux: hardware requirements, quantization, inference engines comparison (Ollama vs llama.cpp vs vLLM), and GPU setup.">
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<header class="header">
+  <div class="container header-inner">
+    <a href="/" class="logo">~/localai-lab</a>
+    <nav class="nav">
+      <a href="/guides/">Guides</a>
+      <a href="/tools/">Tools</a>
+      <a href="/newsletter/">Newsletter</a>
+    </nav>
+  </div>
+</header>
+
+<article class="guide-page">
+  <div class="container">
+    <div class="guide-header">
+      <span class="tag tag-beginner">beginner</span>
+      <h1>Run LLMs Locally on Linux</h1>
+      <div class="meta"><span>12 min read</span><span>Updated May 2026</span></div>
+    </div>
+    <div class="toc">
+      <h3>Table of Contents</h3>
+      <ol>
+        <li><a href="#hardware">Hardware Requirements by Model Size</a></li>
+        <li><a href="#quantization">Understanding Quantization</a></li>
+        <li><a href="#comparison">Engine Comparison: Ollama vs llama.cpp vs vLLM</a></li>
+        <li><a href="#gpu-setup">GPU Acceleration Setup</a></li>
+        <li><a href="#which-engine">Which Engine Should You Choose?</a></li>
+      </ol>
+    </div>
+    <div class="guide-content">
+
+      <h2 id="hardware">Hardware Requirements by Model Size</h2>
+      <p>Before you choose a model, understand what your hardware can handle. The key metric is how much VRAM your GPU has — or system RAM if using CPU only.</p>
+
+      <table>
+        <tr><th>Model Size</th><th>Quantization</th><th>Memory Required</th><th>Expected Speed (GPU)</th><th>Expected Speed (CPU)</th></tr>
+        <tr><td>3B (e.g., Llama 3.2 3B)</td><td>Q4_K_M</td><td>~2.5 GB</td><td>100+ tok/s</td><td>15-25 tok/s</td></tr>
+        <tr><td>7-8B (e.g., Mistral, Llama 3.1 8B)</td><td>Q4_K_M</td><td>~5.5 GB</td><td>60-80 tok/s</td><td>5-10 tok/s</td></tr>
+        <tr><td>13B (e.g., Llama 2 13B)</td><td>Q4_K_M</td><td>~8 GB</td><td>30-45 tok/s</td><td>2-4 tok/s</td></tr>
+        <tr><td>30-34B (e.g., Yi 34B)</td><td>Q4_K_M</td><td>~20 GB</td><td>15-25 tok/s</td><td>1-2 tok/s</td></tr>
+        <tr><td>70B (e.g., Llama 3.1 70B)</td><td>Q4_K_M</td><td>~40 GB</td><td>5-15 tok/s</td><td>Too slow</td></tr>
+        <tr><td>120B+ (e.g., Qwen 2.5 72B)</td><td>Q3_K_M</td><td>~45 GB</td><td>3-8 tok/s</td><td>Not feasible</td></tr>
+      </table>
+
+      <div class="note">
+        <p><strong>Memory Rule of Thumb:</strong> Multiply the parameter count (in billions) by 0.6 to get approximate GB required at Q4_K_M quantization. At Q8, multiply by 1.2. A 7B model needs 7 × 0.6 ≈ 4.2 GB at Q4.</p>
+      </div>
+
+      <h2 id="quantization">Understanding Quantization</h2>
+      <p>Quantization reduces model precision to save memory and speed up inference. The tradeoff is a small quality loss.</p>
+
+      <h3>Quantization Levels Compared</h3>
+      <table>
+        <tr><th>Level</th><th>Bits per Weight</th><th>Quality vs FP16</th><th>Speed</th><th>Use Case</th></tr>
+        <tr><td>Q2_K</td><td>2.6</td><td>~5% loss</td><td>Fastest</td><td>Low-memory machines, large models</td></tr>
+        <tr><td>Q3_K_M</td><td>3.4</td><td>~3% loss</td><td>Very Fast</td><td>Good balance for 30B+ models</td></tr>
+        <tr><td>Q4_K_M</td><td>4.5</td><td>~1% loss</td><td>Fast</td><td><strong>Recommended default</strong> for most users</td></tr>
+        <tr><td>Q5_K_M</td><td>5.2</td><td>~0.5% loss</td><td>Moderate</td><td>When quality matters more than speed</td></tr>
+        <tr><td>Q6_K</td><td>6.6</td><td>~0.2% loss</td><td>Slower</td><td>High-quality requirement</td></tr>
+        <tr><td>Q8_0</td><td>8.3</td><td>~0.1% loss</td><td>Slowest</td><td>Maximum quality, have memory to spare</td></tr>
+      </table>
+
+      <p>For most users, <strong>Q4_K_M is the sweet spot</strong>. It cuts memory by 4× compared to FP16 while retaining 99%+ of the quality.</p>
+
+      <h2 id="comparison">Engine Comparison: Ollama vs llama.cpp vs vLLM</h2>
+
+      <table>
+        <tr><th>Feature</th><th>Ollama</th><th>llama.cpp</th><th>vLLM</th></tr>
+        <tr><td>Setup Effort</td><td>One command</td><td>Build from source</td><td>pip install</td></tr>
+        <tr><td>Best for</td><td>Single user, quick experiments</td><td>Custom quantization, embedded</td><td>Production serving, many users</td></tr>
+        <tr><td>Quantization</td><td>GGUF (managed automatically)</td><td>GGUF (full control)</td><td>AWQ, GPTQ (no GGUF)</td></tr>
+        <tr><td>GPU Support</td><td>Auto-detected</td><td>CUDA, Metal, Vulkan</td><td>CUDA (best on NVIDIA)</td></tr>
+        <tr><td>API Server</td><td>OpenAI-compatible built-in</td><td>Built-in HTTP server</td><td>OpenAI-compatible (production-grade)</td></tr>
+        <tr><td>Throughput</td><td>Good (single user)</td><td>Good (single user)</td><td><strong>Excellent</strong> (PagedAttention)</td></tr>
+        <tr><td>Batch Processing</td><td>Basic</td><td>Basic</td><td>Excellent (continuous batching)</td></tr>
+        <tr><td>OpenAI SDK Compat</td><td>Yes</td><td>Yes (v1/completions)</td><td>Yes (production-ready)</td></tr>
+      </table>
+
+      <h2 id="gpu-setup">GPU Acceleration Setup</h2>
+
+      <h3>NVIDIA (CUDA)</h3>
+      <pre><code># Check CUDA availability
+nvidia-smi
+
+# Install CUDA toolkit (Ubuntu/Debian)
+sudo apt install nvidia-cuda-toolkit
+
+# Verify
+nvcc --version
+
+# For Ollama — GPU is automatic
+curl -fsSL https://ollama.com/install.sh | sh
+
+# For llama.cpp with CUDA
+git clone https://github.com/ggerganov/llama.cpp
+cd llama.cpp
+cmake -B build -DGGML_CUDA=ON
+cmake --build build --config Release -j$(nproc)
+
+# For vLLM
+pip install vllm
+# vLLM auto-detects CUDA GPUs</code></pre>
+
+      <h3>AMD (ROCm)</h3>
+      <pre><code># Ollama with ROCm
+curl -fsSL https://ollama.com/install.sh | OLLAMA_ROCM=1 sh
+
+# llama.cpp with ROCm
+cmake -B build -DGGML_HIPBLAS=ON
+cmake --build build --config Release -j$(nproc)</code></pre>
+
+      <h3>Verify GPU is Working</h3>
+      <pre><code>$ ollama run llama3.2:3b
+
+# In another terminal
+$ nvidia-smi
+Mon May 25 11:00:00 2026
++------------------------------------------------------+
+| NVIDIA-SMI 555.42.06    Driver Version: 555.42.06    |
++------------------------------------------------------+
+| GPU  Name        Persistence-M| Bus-Id        Disp.A |
+|    0  RTX 4060              On | 00000000:01:00.0  On |
++------------------------------------------------------+
+| 98%   62C    P0    115W / 115W |  3456MiB /  8188MiB |
++------------------------------------------------------+
+
+# Look for high GPU utilization and memory usage → GPU is working</code></pre>
+
+      <h2 id="which-engine">Which Engine Should You Choose?</h2>
+
+      <table>
+        <tr><th>Your Situation</th><th>Recommendation</th><th>Why</th></tr>
+        <tr><td>First time, just want to chat</td><td>Ollama</td><td>Install and run in under 2 minutes</td></tr>
+        <tr><td>Building a personal AI assistant</td><td>Ollama + Open WebUI</td><td>Easiest full-stack setup</td></tr>
+        <tr><td>Need custom quantization</td><td>llama.cpp</td><td>Full control over GGUF parameters</td></tr>
+        <tr><td>Production API for many users</td><td>vLLM</td><td>PagedAttention = best throughput</td></tr>
+        <tr><td>Embedding LLM in an app</td><td>llama.cpp (C++ lib) or vLLM (Python)</td><td>Depends on your stack</td></tr>
+        <tr><td>RAG pipeline</td><td>Ollama for LLM + ChromaDB</td><td>Simple, well-documented</td></tr>
+        <tr><td>Maximum throughput on one GPU</td><td>vLLM</td><td>Continuous batching = 2-5× more requests/second</td></tr>
+      </table>
+
+    </div>
+  </div>
+</article>
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <span>&copy; 2026 LocalAI Lab.</span>
+    <div class="footer-links">
+      <a href="/guides/">Guides</a>
+      <a href="/newsletter/">Newsletter</a>
+    </div>
+  </div>
+</footer>
+</body>
+</html>
