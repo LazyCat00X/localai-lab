@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://LazyCat00X.github.io/localai-lab/sitemap.xml
