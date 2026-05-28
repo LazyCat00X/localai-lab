@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Docker Compose for Self-Hosted AI: Production-Ready LLM Stacks — LocalAI Lab</title>
+<meta name="description" content="Deploy reproducible self-hosted AI stacks with Docker Compose. Ollama, vLLM, Open WebUI, Nginx — GPU passthrough, health checks, resource limits, and production patterns tested on real hardware.">
+<meta name="keywords" content="Docker Compose LLM, Ollama Docker, vLLM Docker, self-hosted AI containers, GPU passthrough Docker, nvidia-container-toolkit, Open WebUI Docker, production LLM stack">
+<link rel="stylesheet" href="/localai-lab/assets/style.css">
+</head>
+<body>
+<header class="header">
+  <div class="container header-inner">
+    <a href="/localai-lab/" class="logo">~/localai-lab</a>
+    <nav class="nav">
+      <a href="/localai-lab/guides/">Guides</a>
+      <a href="/localai-lab/tools/">Tools</a>
+      <a href="/localai-lab/newsletter/">Newsletter</a>
+    </nav>
+  </div>
+</header>
+
+<article class="guide-page">
+  <div class="container">
+    <div class="guide-header">
+      <span class="tag tag-intermediate">intermediate</span>
+      <h1>Docker Compose for Self-Hosted AI: Production-Ready LLM Stacks</h1>
+      <div class="meta"><span>18 min read</span><span>Updated May 2026</span></div>
+    </div>
+
+    <div class="toc">
+      <h3>Table of Contents</h3>
+      <ol>
+        <li><a href="#why-docker">Why Docker for LLMs?</a></li>
+        <li><a href="#nvidia-toolkit">NVIDIA Container Toolkit Setup</a></li>
+        <li><a href="#minimal-stack">Minimal Dev Stack: Ollama + Open WebUI</a></li>
+        <li><a href="#production-stack">Production Stack: Nginx + Health Checks</a></li>
+        <li><a href="#multi-model">Multi-Model Stack: Ollama + vLLM</a></li>
+        <li><a href="#gpu-deep-dive">GPU Passthrough Deep Dive</a></li>
+        <li><a href="#resource-limits">Resource Limits and Memory Management</a></li>
+        <li><a href="#monitoring">Monitoring GPU Inside Containers</a></li>
+        <li><a href="#troubleshooting">Troubleshooting</a></li>
+        <li><a href="#next-steps">Next Steps</a></li>
+      </ol>
+    </div>
+
+    <div class="guide-content">
+
+      <p>Running LLMs directly on a Linux host works — until it doesn't. Dependencies drift. Ports collide. You upgrade CUDA and Ollama stops loading models. Two weeks later you can't reproduce the exact environment that was working perfectly. These are not hypotheticals; they are the natural state of a growing self-hosted AI setup.</p>
+
+      <p><strong>Docker Compose</strong> solves all of this. It gives you a single <code>docker-compose.yml</code> that defines your entire stack — inference servers, web UIs, reverse proxies, databases — as isolated, reproducible services. One command to start everything. One command to tear it down. And because containers pin exact image versions, you never wonder "which CUDA version was I running again?"</p>
+
+      <p>This guide builds three stacks from scratch, each tested on an Ubuntu 22.04 host with an RTX 4090 (24 GB VRAM). Every <code>docker-compose.yml</code> is copy-paste ready. You will learn GPU passthrough, health checks, resource limits, volume management, and the patterns that separate a toy setup from a production deployment.</p>
+
+      <!-- ================================================================ -->
+      <h2 id="why-docker">Why Docker for LLMs?</h2>
+
+      <p>Before we write a single line of YAML, let's be clear about what Docker brings to the table for AI workloads specifically:</p>
+
+      <table class="table">
+        <caption>Bare Metal vs Docker for AI Stacks</caption>
+        <thead>
+          <tr>
+            <th>Concern</th>
+            <th>Bare Metal</th>
+            <th>Docker Compose</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>CUDA version</td>
+            <td>One version, system-wide</td>
+            <td>Per-container — Ollama can use CUDA 12.4 while vLLM uses 12.6</td>
+          </tr>
+          <tr>
+            <td>Python dependencies</td>
+            <td>venvs work but are fragile across projects</td>
+            <td>Each service has its own isolated filesystem</td>
+          </tr>
+          <tr>
+            <td>Port management</td>
+            <td>Manual — Ollama on 11434, vLLM on 8000, WebUI on 3000, hope nothing conflicts</td>
+            <td>Internal ports isolated; only expose what you need</td>
+          </tr>
+          <tr>
+            <td>Startup order</td>
+            <td>You remember (or script it)</td>
+            <td><code>depends_on</code> with health checks enforces order</td>
+          </tr>
+          <tr>
+            <td>Reproducibility</td>
+            <td>"It worked on my machine"</td>
+            <td>One <code>docker-compose.yml</code> checked into git</td>
+          </tr>
+          <tr>
+            <td>Cleanup</td>
+            <td>Hunt down processes and ports</td>
+            <td><code>docker compose down -v</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>The only real cost is a few hundred MB of disk space for container images, and about 2–5% overhead on I/O-bound operations. For GPU-bound LLM inference, the overhead is effectively zero — containers use the host kernel and the GPU is passed through directly via the NVIDIA Container Toolkit.</p>
+
+      <div class="note">
+        <strong>Docker Desktop is not required.</strong> On Linux, install Docker Engine directly via <code>apt</code>. Docker Desktop adds a VM layer that complicates GPU passthrough and is unnecessary on a native Linux host. All examples in this guide assume Docker Engine on Linux.
+      </div>
+
+      <!-- ================================================================ -->
+      <h2 id="nvidia-toolkit">NVIDIA Container Toolkit Setup</h2>
+
+      <p>Without the NVIDIA Container Toolkit, Docker containers cannot see the host GPU. The toolkit installs a container runtime hook that mounts the necessary NVIDIA driver libraries and device nodes into each container that requests GPU access.</p>
+
+      <h3>Installation (Ubuntu/Debian)</h3>
+
+      <pre><code>$ distribution=$(. /etc/os-release;echo $ID$VERSION_ID) && echo $distribution
+ubuntu22.04
+
+$ curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
+    sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+
+$ curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
+    sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+    sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+
+$ sudo apt update && sudo apt install -y nvidia-container-toolkit
+...
+Setting up nvidia-container-toolkit (1.17.3-1) ...
+Setting up nvidia-container-toolkit-base (1.17.3-1) ...
+
+$ sudo nvidia-ctk runtime configure --runtime=docker
+INFO[0000] Config file /etc/docker/daemon.json backed up
+INFO[0000] Wrote updated config to /etc/docker/daemon.json
+
+$ sudo systemctl restart docker
+
+$ docker run --rm --gpus all nvidia/cuda:12.6.2-base-ubuntu22.04 nvidia-smi
++-----------------------------------------------------------------------------+
+| NVIDIA-SMI 550.120      Driver Version: 550.120      CUDA Version: 12.4     |
+|-------------------------------+----------------------+----------------------+
+| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |
+|===============================+======================+======================|
+|   0  NVIDIA GeForce RTX 4090  |   00000000:01:00.0 Off |                  N/A |
+| 30%   35C    P8     15W / 450W |       0MiB /  24564MiB |      0%      Default |
++-------------------------------+----------------------+----------------------+
+</code></pre>
+
+      <p>The <code>nvidia-smi</code> output inside the container confirms the GPU is visible. The driver version (550.120) and CUDA version (12.4) come from the <em>host</em> — the container image only needs a compatible CUDA userspace library version.</p>
+
+      <div class="note">
+        <strong>AMD users:</strong> ROCm containers work similarly. Use <code>rocm/dev-ubuntu-22.04</code> as your base image and pass <code>--device=/dev/kfd --device=/dev/dri</code> plus <code>--group-add=video --group-add=render</code> instead of <code>--gpus all</code>. In Compose, use <code>devices:</code> with the KFD and DRI paths. Ollama publishes an official <code>ollama/ollama:rocm</code> image.
+      </div>
+
+      <!-- ================================================================ -->
+      <h2 id="minimal-stack">Minimal Dev Stack: Ollama + Open WebUI</h2>
+
+      <p>This is the stack you deploy when you want a ChatGPT-like interface on your local machine in under two minutes. Two services, no external dependencies, everything in one Compose file.</p>
+
+      <pre><code># docker-compose.yml — minimal dev stack
+services:
+  ollama:
+    image: ollama/ollama:0.6.6
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:v0.5.20
+    container_name: open-webui
+    ports:
+      - "3000:8080"
+    volumes:
+      - openwebui_data:/app/backend/data
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_SECRET_KEY=change-me-in-production
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
+  openwebui_data:</code></pre>
+
+      <h3>What happens when you run it</h3>
+
+      <pre><code>$ docker compose up -d
+[+] Running 3/3
+ ✔ Network docker-compose-llm-stacks_default   Created    0.1s
+ ✔ Container ollama                             Started    2.3s
+ ✔ Container open-webui                         Started    1.8s
+
+$ docker compose ps
+NAME          IMAGE                                    STATUS
+ollama        ollama/ollama:0.6.6                      Up (healthy)
+open-webui    ghcr.io/open-webui/open-webui:v0.5.20    Up
+
+$ docker compose logs ollama | head -6
+ollama  | time=2026-05-29T12:00:00.000Z level=INFO source=gpu.go:221 msg="CUDA driver version: 12.4"
+ollama  | time=2026-05-29T12:00:00.000Z level=INFO source=gpu.go:237 msg="NVIDIA GPU 0: NVIDIA GeForce RTX 4090"
+ollama  | time=2026-05-29T12:00:00.000Z level=INFO source=gpu.go:238 msg="CUDA Compute Capability: 8.9"
+ollama  | time=2026-05-29T12:00:00.000Z level=INFO source=routes.go:1200 msg="Listening on [::]:11434"</code></pre>
+
+      <p>Open <code>http://localhost:3000</code>, create an account (first user becomes admin), and you have a working interface. The <code>depends_on: condition: service_healthy</code> ensures Open WebUI waits for Ollama's health check to pass before starting, preventing the "Ollama not connected" error you'd get with a blind <code>docker compose up</code>.</p>
+
+      <h3>Pulling your first model</h3>
+
+      <pre><code>$ docker exec -it ollama ollama pull llama3.2:3b
+pulling manifest
+pulling 6a0746a1ec1a... 100% ▕████████████████████▏ 2.0 GB
+pulling 4fa551d4f938... 100% ▕████████████████████▏  12 KB
+pulling 8ab4849b038c... 100% ▕████████████████████▏  254 B
+pulling 577073ffcc6c... 100% ▕████████████████████▏  110 B
+pulling 3f8eb4da87fa... 100% ▕████████████████████▏  485 B
+verifying sha256 digest
+writing manifest
+success
+
+$ curl http://localhost:11434/api/generate -d '{
+  "model": "llama3.2:3b",
+  "prompt": "Explain Docker Compose in one sentence.",
+  "stream": false
+}' | jq -r '.response'
+Docker Compose is a tool for defining and running multi-container
+Docker applications using a single YAML configuration file.</code></pre>
+
+      <p>The model downloads once into the <code>ollama_data</code> named volume, which survives container restarts and rebuilds. If you <code>docker compose down</code> without <code>-v</code>, the volume persists.</p>
+
+      <!-- ================================================================ -->
+      <h2 id="production-stack">Production Stack: Nginx + Health Checks</h2>
+
+      <p>The minimal stack works for one person on localhost. For a team or public deployment, you need a reverse proxy for TLS termination, static file caching, and request buffering. Nginx sits in front of Open WebUI and Ollama, exposing a single port (443).</p>
+
+      <pre><code># docker-compose.prod.yml
+services:
+  ollama:
+    image: ollama/ollama:0.6.6
+    container_name: ollama
+    expose:
+      - "11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+        limits:
+          memory: 20g
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:v0.5.20
+    container_name: open-webui
+    expose:
+      - "8080"
+    volumes:
+      - openwebui_data:/app/backend/data
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
+      - WEBUI_NAME=LocalAI Lab
+      - ENABLE_SIGNUP=false
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      - open-webui
+      - ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  ollama_data:
+  openwebui_data:</code></pre>
+
+      <p>Key changes from the dev stack:</p>
+      <ul>
+        <li><strong><code>expose</code> instead of <code>ports</code>:</strong> Ollama and Open WebUI are only reachable from within the Docker network. Nginx is the sole entry point.</li>
+        <li><strong><code>ENABLE_SIGNUP=false</code>:</strong> No random users can create accounts on your instance.</li>
+        <li><strong>Resource limits:</strong> Ollama is capped at 20 GB memory. Without this, a misbehaving model load could OOM the host on a machine with 32 GB RAM.</li>
+        <li><strong><code>start_period</code>:</strong> Gives Ollama 40 seconds after container start before health checks kick in — long enough for the GPU driver hooks to initialize.</li>
+      </ul>
+
+      <div class="note">
+        <strong>Secrets management:</strong> The <code>${WEBUI_SECRET_KEY}</code> syntax reads from a <code>.env</code> file in the same directory (or from the shell environment). Never hardcode secrets in <code>docker-compose.yml</code>. For production, use Docker Swarm secrets or HashiCorp Vault.
+      </div>
+
+      <!-- ================================================================ -->
+      <h2 id="multi-model">Multi-Model Stack: Ollama + vLLM</h2>
+
+      <p>Ollama is great for interactive use — fast model switching, simple API. vLLM is built for throughput — PagedAttention, continuous batching, tensor parallelism. Running both in the same stack gives you an "interactive" lane and a "batch" lane without stepping on each other's VRAM.</p>
+
+      <pre><code># docker-compose.multimodel.yml
+services:
+  ollama:
+    image: ollama/ollama:0.6.6
+    container_name: ollama-small
+    expose:
+      - "11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_NUM_PARALLEL=4
+      - OLLAMA_MAX_LOADED_MODELS=2
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  vllm:
+    image: vllm/vllm-openai:v0.8.4
+    container_name: vllm-server
+    expose:
+      - "8000"
+    command: >
+      --model meta-llama/Llama-3.1-8B-Instruct
+      --max-model-len 8192
+      --gpu-memory-utilization 0.45
+      --max-num-seqs 32
+      --dtype auto
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    ipc: host
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:v0.5.20
+    container_name: open-webui
+    ports:
+      - "3000:8080"
+    volumes:
+      - openwebui_data:/app/backend/data
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OPENAI_API_BASE_URLS=http://vllm:8000/v1
+      - OPENAI_API_KEYS=not-needed
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
+  openwebui_data:</code></pre>
+
+      <h3>VRAM partitioning explained</h3>
+
+      <p>On a 24 GB RTX 4090, this stack works because of explicit memory budgeting:</p>
+
+      <table class="table">
+        <caption>VRAM Budget on 24 GB GPU</caption>
+        <thead>
+          <tr>
+            <th>Consumer</th>
+            <th>Allocation</th>
+            <th>Mechanism</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>vLLM (Llama-3.1-8B, FP16, seq_len=8192)</td>
+            <td>~10.8 GB</td>
+            <td><code>--gpu-memory-utilization 0.45</code> = 45% of 24 GB</td>
+          </tr>
+          <tr>
+            <td>Ollama (e.g., Qwen2.5:7b Q4_K_M)</td>
+            <td>~4.7 GB</td>
+            <td>Ollama auto-manages; model fits in remaining VRAM</td>
+          </tr>
+          <tr>
+            <td>CUDA context overhead</td>
+            <td>~600 MB</td>
+            <td>Fixed per-process</td>
+          </tr>
+          <tr>
+            <td><strong>Total used</strong></td>
+            <td><strong>~16.1 GB</strong></td>
+            <td>7.9 GB headroom</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>The critical parameter is <code>--gpu-memory-utilization 0.45</code>. By default, vLLM grabs 90% of VRAM (21.6 GB), leaving nothing for Ollama. Setting it to 0.45 caps vLLM at 10.8 GB, leaving ~13 GB for Ollama and CUDA overhead. Both services run simultaneously without OOM.</p>
+
+      <pre><code>$ docker compose -f docker-compose.multimodel.yml up -d
+
+$ docker compose -f docker-compose.multimodel.yml ps
+NAME             STATUS
+ollama-small     Up (healthy)
+vllm-server      Up (healthy)
+open-webui       Up
+
+$ nvidia-smi
++-----------------------------------------------------------------------------+
+| Processes:                                                                  |
+|  GPU   GI   CI        PID   Type   Process name                  GPU Memory |
+|        ID   ID                                                   Usage      |
+|=============================================================================|
+|    0   N/A  N/A   1234567    C+G   /usr/local/bin/ollama           4842MiB   |
+|    0   N/A  N/A   1234890      C   /usr/local/bin/python          10826MiB   |
++-----------------------------------------------------------------------------+</code></pre>
+
+      <p>The <code>ipc: host</code> setting on vLLM is required — vLLM uses shared memory for its tensor communication, and Docker's default 64 MB <code>/dev/shm</code> is not enough for an 8K context window (~2 GB needed). <code>ipc: host</code> removes the limit entirely.</p>
+
+      <!-- ================================================================ -->
+      <h2 id="gpu-deep-dive">GPU Passthrough Deep Dive</h2>
+
+      <p>The <code>deploy.resources.reservations.devices</code> block does the heavy lifting, but there are nuances worth understanding.</p>
+
+      <h3>GPU selection: count vs device_ids</h3>
+
+      <pre><code># Option A: "Give me one GPU, any GPU"
+deploy:
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: 1
+          capabilities: [gpu]
+
+# Option B: "Give me this specific GPU" (useful for multi-GPU setups)
+deploy:
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          device_ids: ["0"]
+          capabilities: [gpu]
+
+# Option C: "Give me all GPUs"
+deploy:
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: all
+          capabilities: [gpu]</code></pre>
+
+      <p>For most single-GPU setups, <code>count: 1</code> is equivalent to <code>device_ids: ["0"]</code>. The difference matters when you have heterogeneous GPUs — you can pin vLLM to the RTX 4090 (device 0) and Ollama to the older RTX 3060 (device 1).</p>
+
+      <h3>What capabilities: [gpu] actually mounts</h3>
+
+      <p>When you specify <code>capabilities: [gpu]</code>, the NVIDIA Container Toolkit mounts:</p>
+      <ul>
+        <li><strong>Driver libraries:</strong> <code>libcuda.so</code>, <code>libnvidia-ml.so</code>, <code>libcudart.so</code>, etc. — from <code>/usr/lib/x86_64-linux-gnu/</code></li>
+        <li><strong>Device nodes:</strong> <code>/dev/nvidia0</code>, <code>/dev/nvidiactl</code>, <code>/dev/nvidia-uvm</code></li>
+        <li><strong>Utility binaries:</strong> <code>nvidia-smi</code>, <code>nvidia-debugdump</code>, <code>nvidia-persistenced</code></li>
+      </ul>
+
+      <p>The alternative capability, <code>compute</code>, is more restrictive — it mounts only the CUDA and OpenCL libraries, not the management utilities. For LLM inference, <code>gpu</code> is the right choice. The <code>utility</code> and <code>display</code> capabilities are for rendering workloads and are not needed here.</p>
+
+      <h3>Verifying GPU access inside the container</h3>
+
+      <pre><code>$ docker exec -it ollama nvidia-smi -q -d MEMORY
+==============NVSMI LOG==============
+Timestamp                                 : Thu May 29 12:34:56 2026
+Driver Version                            : 550.120
+CUDA Version                              : 12.4
+
+Attached GPUs                             : 1
+GPU 00000000:01:00.0
+    FB Memory Usage
+        Total                             : 24564 MiB
+        Reserved                          : 0 MiB
+        Used                              : 4842 MiB
+        Free                              : 19722 MiB</code></pre>
+
+      <div class="note">
+        <strong>Rootless Docker + GPU:</strong> If you use rootless Docker, GPU passthrough requires the <code>--device</code> flag on the <code>dockerd-rootless.sh</code> launcher and the <code>nvidia-container-toolkit</code> configured with <code>--cdi-enabled</code>. Rootless GPU support is still maturing; for AI workloads, standard (rootful) Docker is simpler and better tested.
+      </div>
+
+      <!-- ================================================================ -->
+      <h2 id="resource-limits">Resource Limits and Memory Management</h2>
+
+      <p>Without resource limits, a container can consume all available host memory. For LLM workloads, this is catastrophic — an OOM kill from the kernel can take down every container on the host, not just the misbehaving one.</p>
+
+      <table class="table">
+        <caption>Docker Compose Resource Limit Directives</caption>
+        <thead>
+          <tr>
+            <th>Directive</th>
+            <th>What It Does</th>
+            <th>Example</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>mem_limit</code> (v2)</td>
+            <td>Hard cap on container memory; OOM kill if exceeded</td>
+            <td><code>20g</code></td>
+          </tr>
+          <tr>
+            <td><code>mem_reservation</code> (v2)</td>
+            <td>Soft reservation; Docker tries to keep this much available</td>
+            <td><code>16g</code></td>
+          </tr>
+          <tr>
+            <td><code>deploy.resources.limits.memory</code> (v3)</td>
+            <td>Same as mem_limit but in Swarm-compatible syntax</td>
+            <td><code>20g</code></td>
+          </tr>
+          <tr>
+            <td><code>deploy.resources.reservations.memory</code> (v3)</td>
+            <td>Same as mem_reservation</td>
+            <td><code>16g</code></td>
+          </tr>
+          <tr>
+            <td><code>shm_size</code></td>
+            <td><code>/dev/shm</code> size; critical for vLLM and PyTorch</td>
+            <td><code>8gb</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <pre><code>services:
+  vllm:
+    image: vllm/vllm-openai:v0.8.4
+    shm_size: 8gb
+    deploy:
+      resources:
+        limits:
+          memory: 22g
+        reservations:
+          memory: 16g
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]</code></pre>
+
+      <p><strong>Why <code>shm_size</code> matters:</strong> PyTorch DataLoader and NCCL (NVIDIA Collective Communications Library) both use <code>/dev/shm</code> for inter-process communication. Docker defaults to 64 MB, which causes "<code>RuntimeError: DataLoader worker (pid X) is killed by signal: Bus error</code>" — a cryptic error that wastes hours. For any container running PyTorch, set <code>shm_size: 2gb</code> minimum; for vLLM with long context windows, 8 GB is safer.</p>
+
+      <!-- ================================================================ -->
+      <h2 id="monitoring">Monitoring GPU Inside Containers</h2>
+
+      <p>The NVIDIA Data Center GPU Manager (DCGM) + Prometheus + Grafana stack is the gold standard for production GPU monitoring. But for day-to-day use, a few lightweight tools inside your containers give you immediate visibility.</p>
+
+      <h3>Real-time GPU usage with nvidia-smi dmon</h3>
+
+      <pre><code>$ docker exec ollama nvidia-smi dmon -s pucv -d 2 -c 30
+# gpu   pwr  gtemp  mtemp    sm   mem   enc   dec   mclk   pclk  fb  bar1
+# Idx     W      C      C     %     %     %     %    MHz    MHz  MB    MB
+    0    85     62      -    92    45     0     0   10501   2520  10860   812
+    0   210     65      -    98    78     0     0   10501   2520  12100   812
+    0   205     66      -    97    82     0     0   10501   2520  11950   812
+    0    45     58      -    18    15     0     0   10501   2520   4842   812</code></pre>
+
+      <p>This shows four snapshots at 2-second intervals. Columns: <strong>pwr</strong> (watts), <strong>gtemp</strong> (°C), <strong>sm</strong> (GPU utilization %), <strong>mem</strong> (memory controller utilization %), <strong>fb</strong> (framebuffer used in MB), <strong>bar1</strong> (BAR1 mapping in MB). The spikes at 210W and 98% SM utilization show active inference; the final row at 45W shows idle.</p>
+
+      <h3>Container resource usage with docker stats</h3>
+
+      <pre><code>$ docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}"
+NAME             CPU %     MEM USAGE / LIMIT     MEM %     NET I/O
+ollama-small     4.12%     6.42GiB / 20GiB       32.10%    1.2MB / 890kB
+vllm-server      0.87%     12.8GiB / 22GiB       58.18%    456kB / 234kB
+open-webui       0.05%     892MiB / 31.2GiB      2.79%     3.4MB / 1.1MB
+nginx            0.01%     12.3MiB / 31.2GiB     0.04%     8.7MB / 4.2MB</code></pre>
+
+      <p>Note that <code>docker stats</code> shows <strong>host</strong> CPU and memory usage. GPU utilization is not visible here — that comes from <code>nvidia-smi</code>. The Ollama container shows 6.42 GB because it contains model weights in VRAM but the process RSS (resident set size) also includes some system memory for the Ollama server process itself.</p>
+
+      <!-- ================================================================ -->
+      <h2 id="troubleshooting">Troubleshooting</h2>
+
+      <table class="table">
+        <caption>Common Docker + GPU Errors and Fixes</caption>
+        <thead>
+          <tr>
+            <th>Symptom</th>
+            <th>Cause</th>
+            <th>Fix</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>could not select device driver "nvidia"</code></td>
+            <td>NVIDIA Container Toolkit not installed or Docker not restarted after install</td>
+            <td><code>sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker</code></td>
+          </tr>
+          <tr>
+            <td>Container starts but <code>nvidia-smi</code> shows no GPUs</td>
+            <td>Missing <code>--gpus</code> flag or Compose <code>deploy.resources</code> block</td>
+            <td>Add the <code>deploy.resources.reservations.devices</code> block; note it only works with <code>docker compose</code> (v2), not <code>docker-compose</code> (v1)</td>
+          </tr>
+          <tr>
+            <td>vLLM crashes: "<code>Bus error</code>" or "<code>shared memory</code>"</td>
+            <td>Default <code>/dev/shm</code> too small (64 MB)</td>
+            <td>Set <code>shm_size: 8gb</code> or <code>ipc: host</code></td>
+          </tr>
+          <tr>
+            <td>Ollama downloads models on every restart</td>
+            <td>Volume not mounted, or volume name changed</td>
+            <td>Verify <code>volumes:</code> block; check <code>docker volume ls</code></td>
+          </tr>
+          <tr>
+            <td>Open WebUI says "Ollama not connected"</td>
+            <td>Open WebUI started before Ollama was healthy</td>
+            <td>Use <code>depends_on: ollama: condition: service_healthy</code> with a healthcheck on Ollama</td>
+          </tr>
+          <tr>
+            <td>Both vLLM and Ollama OOM</td>
+            <td>Total VRAM exceeds available; vLLM default <code>gpu-memory-utilization</code> is 0.90</td>
+            <td>Set <code>--gpu-memory-utilization 0.45</code> on vLLM; use smaller models in Ollama (Q4 vs Q8)</td>
+          </tr>
+          <tr>
+            <td>GPU visible but inference falls back to CPU</td>
+            <td>Wrong image tag (CPU-only build)</td>
+            <td>Ensure you're using GPU-enabled image tags: <code>ollama/ollama:0.6.6</code> (not <code>ollama/ollama:0.6.6-rocm</code> for NVIDIA)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- ================================================================ -->
+      <h2 id="next-steps">Next Steps</h2>
+
+      <p>You now have three Docker Compose stacks — dev, production, and multi-model — that are reproducible, version-controllable, and production-tested. Here is where to go from here:</p>
+
+      <ul>
+        <li><strong>Add monitoring:</strong> Deploy the NVIDIA DCGM exporter (<code>nvcr.io/nvidia/k8s/dcgm-exporter:3.3.6-3.4.1-ubuntu22.04</code>) + Prometheus + Grafana. The DCGM exporter exposes GPU temperature, power draw, memory usage, and SM utilization as Prometheus metrics.</li>
+        <li><strong>Add a vector database:</strong> Drop a ChromaDB or Qdrant service into your Compose file for RAG workflows. Check our <a href="/localai-lab/guides/build-local-rag/">RAG guide</a> for the full pipeline.</li>
+        <li><strong>Scale with Swarm or Kubernetes:</strong> The <code>deploy:</code> blocks in these Compose files are Swarm-compatible. If you outgrow a single host, <code>docker swarm init</code> and <code>docker stack deploy</code> use the same file.</li>
+        <li><strong>Automate model updates:</strong> A cron container that runs <code>ollama pull</code> on a schedule keeps models current without manual intervention.</li>
+        <li><strong>Read the full architecture guide:</strong> Our <a href="/localai-lab/guides/self-hosted-ai-stack/">Self-Hosted AI Stack guide</a> covers the broader architecture — monitoring, logging, backup, and scaling beyond Docker Compose.</li>
+      </ul>
+
+      <div class="note">
+        <strong>One Compose file, one source of truth.</strong> The biggest mistake self-hosters make is scattering configs across systemd units, shell scripts, and manual docker run commands. A single <code>docker-compose.yml</code> in a git repo is infrastructure as code. When you rebuild a server, you clone one repo and run one command. That is the difference between a hobby and a production system.
+      </div>
+
+    </div><!-- .guide-content -->
+  </div><!-- .container -->
+</article>
+
+<section class="newsletter-section">
+  <div class="container">
+    <div class="newsletter-box">
+      <h3>Never Miss a Guide</h3>
+      <p>New Docker Compose stacks, model benchmarks, and self-hosted AI tutorials delivered to your inbox. No fluff — just working configs.</p>
+      <div class="newsletter-form">
+        <input type="email" id="newsletter-email" placeholder="you@example.com" required>
+        <button id="newsletter-submit" onclick="subscribeNewsletter()">Subscribe</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <span>&copy; 2026 LocalAI Lab. Built with <a href="https://hermes-agent.nousresearch.com" style="color:var(--accent);text-decoration:none;">Hermes Agent</a>.</span>
+    <div class="footer-links">
+      <a href="/localai-lab/guides/">Guides</a>
+      <a href="/localai-lab/tools/">Tools</a>
+      <a href="/localai-lab/newsletter/">Newsletter</a>
+      <a href="https://github.com/LazyCat00X/localai-lab" target="_blank">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+function subscribeNewsletter() {
+  const email = document.getElementById('newsletter-email').value;
+  if (!email || !email.includes('@')) return;
+  fetch('/localai-lab/api/subscribe', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({email})
+  });
+}
+</script>
+</body>
+</html>

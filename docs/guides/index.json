@@ -89,5 +89,12 @@
     "level": "advanced",
     "readTime": 22,
     "url": "/localai-lab/guides/lora-fine-tuning/"
+  },
+  {
+    "title": "Docker Compose for Self-Hosted AI Stacks",
+    "description": "Deploy reproducible LLM stacks with Docker Compose: Ollama, vLLM, Open WebUI, Nginx. GPU passthrough, health checks, resource limits, and production patterns.",
+    "level": "intermediate",
+    "readTime": 18,
+    "url": "/localai-lab/guides/docker-compose-llm-stacks/"
   }
 ]
