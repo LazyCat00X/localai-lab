@@ -82,5 +82,12 @@
     "level": "advanced",
     "readTime": 20,
     "url": "/localai-lab/guides/model-evaluation-local-llms/"
+  },
+  {
+    "title": "Fine-tuning LLMs with LoRA/QLoRA",
+    "description": "Complete practical guide to fine-tuning LLMs using LoRA and QLoRA. Compare Unsloth, Axolotl, LLaMA-Factory with real commands, hardware requirements, and hyperparameter tuning.",
+    "level": "advanced",
+    "readTime": 22,
+    "url": "/localai-lab/guides/lora-fine-tuning/"
   }
 ]

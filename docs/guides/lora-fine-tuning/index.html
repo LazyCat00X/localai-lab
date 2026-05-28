@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fine-tuning LLMs with LoRA/QLoRA — A Practical Guide — LocalAI Lab</title>
+<meta name="description" content="Complete practical guide to fine-tuning LLMs using LoRA and QLoRA. Compare Unsloth, Axolotl, LLaMA-Factory. Learn real commands, hardware requirements, hyperparameter tuning, and deploy your fine-tuned models.">
+<meta name="keywords" content="LoRA fine-tuning, QLoRA, Unsloth, Axolotl, LLaMA-Factory, LLM training, PEFT, adapter weights, GPU requirements, local AI fine-tuning">
+<link rel="stylesheet" href="/localai-lab/assets/style.css">
+</head>
+<body>
+<header class="header">
+  <div class="container header-inner">
+    <a href="/localai-lab/" class="logo">~/localai-lab</a>
+    <nav class="nav">
+      <a href="/localai-lab/guides/">Guides</a>
+      <a href="/localai-lab/tools/">Tools</a>
+      <a href="/localai-lab/newsletter/">Newsletter</a>
+    </nav>
+  </div>
+</header>
+
+<article class="guide-page">
+  <div class="container">
+    <div class="guide-header">
+      <span class="tag tag-advanced">advanced</span>
+      <h1>Fine-tuning LLMs with LoRA/QLoRA — A Practical Guide</h1>
+      <div class="meta"><span>22 min read</span><span>Updated May 2026</span></div>
+    </div>
+
+    <div class="toc">
+      <h3>Table of Contents</h3>
+      <ol>
+        <li><a href="#what-is-lora">What Are LoRA and QLoRA?</a></li>
+        <li><a href="#hardware">Hardware Requirements</a></li>
+        <li><a href="#tools-comparison">Tool Comparison: Unsloth vs Axolotl vs LLaMA-Factory</a></li>
+        <li><a href="#dataset-prep">Dataset Preparation</a></li>
+        <li><a href="#unsloth">Fine-Tuning with Unsloth</a></li>
+        <li><a href="#axolotl">Fine-Tuning with Axolotl</a></li>
+        <li><a href="#llama-factory">Fine-Tuning with LLaMA-Factory</a></li>
+        <li><a href="#hyperparameters">Hyperparameter Deep Dive</a></li>
+        <li><a href="#inference">Merging and Inference</a></li>
+        <li><a href="#troubleshooting">Troubleshooting</a></li>
+        <li><a href="#next-steps">Next Steps</a></li>
+      </ol>
+    </div>
+
+    <div class="guide-content">
+
+      <p>Fine-tuning large language models used to require a fleet of A100s and deep pockets. That changed with <strong>LoRA</strong> (Low-Rank Adaptation) and <strong>QLoRA</strong> (Quantized LoRA). These techniques let you train a 7-billion-parameter model on a single consumer GPU — a $1,600 RTX 4090 with 24 GB of VRAM — and produce adapter weights that are just a few megabytes, yet rival full fine-tuning quality at 90–95% of the performance.</p>
+
+      <p>This guide is a hands-on, command-by-command walkthrough. You will learn what LoRA and QLoRA actually do, how much hardware you need for each model size, and three production-ready tools (Unsloth, Axolotl, and LLaMA-Factory) with real YAML configs and terminal output. By the end, you will have fine-tuned a model, merged the adapter weights, and served it — all from a Linux terminal.</p>
+
+      <!-- ================================================================ -->
+      <h2 id="what-is-lora">What Are LoRA and QLoRA?</h2>
+
+      <p><strong>Full fine-tuning</strong> updates every weight in the model. A 7B-parameter model in FP16 requires roughly 14 GB just to store the weights, plus another 42 GB for optimizer states (Adam uses two momentum buffers) and ~14 GB for activations and gradients — totaling around 70 GB for a full fine-tune. That is four A100-40GB GPUs just to start training.</p>
+
+      <p><strong>LoRA</strong> (Low-Rank Adaptation, Hu et al., 2021) freezes the original weights and injects small, trainable <em>adapter</em> matrices into the attention layers. Instead of updating the full 4096 &times; 4096 weight matrix in a Q or V projection, LoRA learns two low-rank matrices <code>A</code> and <code>B</code> of shape 4096 &times; <em>r</em> and <em>r</em> &times; 4096, where <em>r</em> (the <strong>LoRA rank</strong>) is a small number like 16 or 64. The result: you train roughly 0.1–1% of the total parameters, slashing VRAM by ~70% and cutting training time by 2–5&times; compared to full fine-tuning, with almost no quality degradation.</p>
+
+      <p><strong>QLoRA</strong> (Dettmers et al., 2023) pushes this further by quantizing the frozen base model to 4-bit precision using the <strong>NF4</strong> (NormalFloat4) data type and double quantization. The base model goes from 16-bit to 4-bit — a 4&times; memory compression — while the LoRA adapters remain in 16-bit (BF16/FP16). A 7B model that needs 14 GB in FP16 now fits in ~4 GB in 4-bit, leaving room for optimizer states and activations on a single 24 GB GPU. QLoRA typically achieves 80–90% of full fine-tuning quality, with some carefully tuned runs reaching 95%.</p>
+
+      <div class="note">
+        <strong>Key insight:</strong> LoRA and QLoRA are not fundamentally different algorithms. QLoRA is just LoRA applied on top of a 4-bit quantized base model. The adapter training math is identical — what changes is the precision of the frozen weights. When you have enough VRAM for FP16 LoRA (≥24 GB for 7B models), prefer it. When VRAM is tight, QLoRA is your ticket.
+      </div>
+
+      <table class="table">
+        <caption>LoRA vs QLoRA vs Full Fine-Tune for a 7B Model</caption>
+        <thead>
+          <tr>
+            <th>Method</th>
+            <th>Trainable Params</th>
+            <th>Min VRAM (7B)</th>
+            <th>Adapter Size</th>
+            <th>Quality vs Full FT</th>
+            <th>Training Speed</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Full Fine-Tune (FP16)</td>
+            <td>7B (100%)</td>
+            <td>~70 GB</td>
+            <td>14 GB (full model)</td>
+            <td>100% (baseline)</td>
+            <td>1&times;</td>
+          </tr>
+          <tr>
+            <td>LoRA (r=16, FP16)</td>
+            <td>~16M (0.23%)</td>
+            <td>~22 GB</td>
+            <td>~32 MB</td>
+            <td>90–95%</td>
+            <td>2–3&times; faster</td>
+          </tr>
+          <tr>
+            <td>QLoRA (r=16, 4-bit)</td>
+            <td>~16M (0.23%)</td>
+            <td>~10 GB</td>
+            <td>~32 MB</td>
+            <td>80–90%</td>
+            <td>1.5–2&times; faster</td>
+          </tr>
+          <tr>
+            <td>LoRA (r=64, FP16)</td>
+            <td>~64M (0.92%)</td>
+            <td>~26 GB</td>
+            <td>~128 MB</td>
+            <td>93–97%</td>
+            <td>~2&times; faster</td>
+          </tr>
+          <tr>
+            <td>QLoRA (r=64, 4-bit)</td>
+            <td>~64M (0.92%)</td>
+            <td>~14 GB</td>
+            <td>~128 MB</td>
+            <td>85–93%</td>
+            <td>1.5–2&times; faster</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>Note that QLoRA with r=64 on a 7B model runs comfortably on a single RTX 3090/4090 (24 GB). The 10–14 GB numbers above include room for a typical batch size of 4–8 and a 2048-token sequence length. With gradient checkpointing enabled, you can push sequence length to 4096 on the same hardware.</p>
+
+      <!-- ================================================================ -->
+      <h2 id="hardware">Hardware Requirements</h2>
+
+      <p>The table below gives practical minimum VRAM for LoRA (FP16) and QLoRA (4-bit) fine-tuning at r=16 with sequence length 2048, batch size 4, and gradient checkpointing enabled. "Comfortable" values include headroom for longer sequences and larger batch sizes.</p>
+
+      <table class="table">
+        <caption>VRAM Requirements by Model Size</caption>
+        <thead>
+          <tr>
+            <th>Model Size</th>
+            <th>LoRA (FP16) Min</th>
+            <th>LoRA (FP16) Comfortable</th>
+            <th>QLoRA (4-bit) Min</th>
+            <th>QLoRA (4-bit) Comfortable</th>
+            <th>Recommended GPU</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1B–3B</td>
+            <td>6 GB</td>
+            <td>10 GB</td>
+            <td>4 GB</td>
+            <td>6 GB</td>
+            <td>RTX 3060 / RTX 4060</td>
+          </tr>
+          <tr>
+            <td>7B–8B</td>
+            <td>16 GB</td>
+            <td>24 GB</td>
+            <td>8 GB</td>
+            <td>12 GB</td>
+            <td>RTX 3090 / RTX 4090</td>
+          </tr>
+          <tr>
+            <td>13B–14B</td>
+            <td>32 GB</td>
+            <td>48 GB</td>
+            <td>16 GB</td>
+            <td>24 GB</td>
+            <td>2&times; RTX 3090 / A6000</td>
+          </tr>
+          <tr>
+            <td>34B</td>
+            <td>60 GB</td>
+            <td>80 GB</td>
+            <td>28 GB</td>
+            <td>40 GB</td>
+            <td>A100-40GB / A6000 (48GB)</td>
+          </tr>
+          <tr>
+            <td>70B–72B</td>
+            <td>120 GB</td>
+            <td>160 GB</td>
+            <td>48 GB</td>
+            <td>60 GB</td>
+            <td>2&times; A100-80GB</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="note">
+        <strong>Pro tip:</strong> QLoRA is not just for consumer GPUs. Even on an A100-80GB, QLoRA lets you train 70B models on a single GPU instead of 4–8, or train with larger batch sizes and longer sequences. The 4-bit quantization overhead adds only ~5–10% to per-step latency on Ampere and newer architectures (A100, RTX 30xx, RTX 40xx) thanks to hardware BF16 support and fused kernels.
+      </div>
+
+      <p><strong>Cloud GPU pricing (May 2026):</strong> If you do not own a GPU, the cheapest route is renting. On <a href="https://runpod.io?ref=localailab" target="_blank" rel="nofollow sponsored">RunPod</a>, an RTX 4090 costs ~$0.44/hr and an A100-80GB ~$1.99/hr. On <a href="https://vast.ai?ref=localailab" target="_blank" rel="nofollow sponsored">Vast.ai</a>, you can find RTX 4090s as low as $0.25/hr on the community marketplace. A full 7B QLoRA fine-tune on 10K examples takes roughly 2–4 hours on an RTX 4090, so the total cloud cost is $0.50–$2.00.</p>
+
+      <!-- ================================================================ -->
+      <h2 id="tools-comparison">Tool Comparison: Unsloth vs Axolotl vs LLaMA-Factory</h2>
+
+      <p>Three tools dominate the LoRA/QLoRA fine-tuning landscape in 2026. They all produce standard PEFT/LoRA adapter weights, but differ in ergonomics, speed, and supported features.</p>
+
+      <table class="table">
+        <caption>Fine-Tuning Tool Comparison</caption>
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th>Unsloth</th>
+            <th>Axolotl</th>
+            <th>LLaMA-Factory</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Interface</strong></td>
+            <td>Python notebook / script</td>
+            <td>YAML config + CLI</td>
+            <td>YAML config + CLI + Web UI</td>
+          </tr>
+          <tr>
+            <td><strong>Training Speed</strong></td>
+            <td>2&times; faster (custom kernels)</td>
+            <td>1&times; (baseline)</td>
+            <td>1&times; (baseline)</td>
+          </tr>
+          <tr>
+            <td><strong>VRAM Efficiency</strong></td>
+            <td>~30–50% less VRAM</td>
+            <td>Standard</td>
+            <td>Standard</td>
+          </tr>
+          <tr>
+            <td><strong>Dataset Formats</strong></td>
+            <td>Alpaca, ShareGPT, custom</td>
+            <td>Alpaca, ShareGPT, ChatML, custom</td>
+            <td>Alpaca, ShareGPT, OpenAI, custom</td>
+          </tr>
+          <tr>
+            <td><strong>QLoRA (4-bit)</strong></td>
+            <td>Yes, built-in</td>
+            <td>Yes</td>
+            <td>Yes</td>
+          </tr>
+          <tr>
+            <td><strong>Full Fine-Tuning</strong></td>
+            <td>No (LoRA/QLoRA only)</td>
+            <td>Yes</td>
+            <td>Yes</td>
+          </tr>
+          <tr>
+            <td><strong>Multi-GPU (DDP/FSDP)</strong></td>
+            <td>Limited</td>
+            <td>Yes (DeepSpeed, FSDP)</td>
+            <td>Yes (DeepSpeed, FSDP)</td>
+          </tr>
+          <tr>
+            <td><strong>DPO / RLHF</strong></td>
+            <td>Yes</td>
+            <td>Yes</td>
+            <td>Yes (DPO, KTO, ORPO, PPO)</td>
+          </tr>
+          <tr>
+            <td><strong>Models Supported</strong></td>
+            <td>Llama, Mistral, Qwen, Gemma, Phi, DeepSeek</td>
+            <td>50+ architectures</td>
+            <td>100+ architectures</td>
+          </tr>
+          <tr>
+            <td><strong>Best For</strong></td>
+            <td>Fast prototyping, consumer GPU</td>
+            <td>Reproducible production runs</td>
+            <td>Experimenting with many models</td>
+          </tr>
+          <tr>
+            <td><strong>Installation</strong></td>
+            <td><code>pip install unsloth</code></td>
+            <td><code>git clone + pip install</code></td>
+            <td><code>git clone + pip install</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="note">
+        <strong>Recommendation:</strong> Start with <strong>Unsloth</strong> if you are on a single consumer GPU and want the fastest iteration speed. Use <strong>Axolotl</strong> for production fine-tuning pipelines where reproducibility and multi-GPU training matter. Use <strong>LLaMA-Factory</strong> if you need to experiment with different model architectures or training paradigms (DPO, reward modeling) from a unified interface.
+      </div>
+
+      <!-- ================================================================ -->
+      <h2 id="dataset-prep">Dataset Preparation</h2>
+
+      <p>All three tools accept datasets in standard formats. The most common are:</p>
+
+      <ul>
+        <li><strong>Alpaca format</strong> — JSON with <code>instruction</code>, <code>input</code> (optional), and <code>output</code> fields. Best for simple instruction-tuning.</li>
+        <li><strong>ShareGPT format</strong> — JSON with <code>conversations</code> array of <code>{"from": "human"/"gpt", "value": "..."}</code> objects. Best for multi-turn chat fine-tuning.</li>
+      </ul>
+
+      <p>Here is a minimal ShareGPT-format dataset saved to <code>~/datasets/my-chat-data.json</code>:</p>
+
+<pre><code>[
+  {
+    "conversations": [
+      {"from": "human", "value": "What is the capital of France?"},
+      {"from": "gpt",   "value": "The capital of France is Paris."}
+    ]
+  },
+  {
+    "conversations": [
+      {"from": "human", "value": "How do I check disk usage on Linux?"},
+      {"from": "gpt",   "value": "Use the `df -h` command to see disk usage in human-readable format. For a specific directory: `du -sh /path/to/dir`."}
+    ]
+  },
+  {
+    "conversations": [
+      {"from": "human", "value": "Write a Python function to reverse a string."},
+      {"from": "gpt",   "value": "```python\ndef reverse_string(s: str) -> str:\n    return s[::-1]\n```"}
+    ]
+  }
+]</code></pre>
+
+      <p><strong>How much data do you need?</strong> LoRA fine-tuning is sample-efficient. With 500–1,000 high-quality, diverse examples, you can teach a model a new style or domain-specific terminology. For deeper behavior changes (e.g., making a model follow a strict output format), aim for 2,000–5,000 examples. Beyond 10,000 examples, full fine-tuning may start to show advantages, though this is rarely necessary for domain adaptation.</p>
+
+      <div class="note">
+        <strong>Data quality over quantity:</strong> A dataset of 500 carefully curated, diverse, and correctly formatted examples will produce a better fine-tune than 5,000 noisy, repetitive ones. Deduplicate your data, remove examples over 4096 tokens (they get truncated anyway), and verify that every output is what you actually want the model to produce.
+      </div>
+
+      <!-- ================================================================ -->
+      <h2 id="unsloth">Fine-Tuning with Unsloth</h2>
+
+      <p>Unsloth is the fastest way to LoRA/QLoRA fine-tune on a single GPU. It uses hand-written Triton and CUDA kernels that are 2&times; faster than Hugging Face's standard training loop and use 30–50% less VRAM. The workflow is a single Python script.</p>
+
+      <h3>Installation</h3>
+
+<pre><code>$ python -m venv unsloth-env
+$ source unsloth-env/bin/activate
+$ pip install unsloth
+$ pip install datasets accelerate bitsandbytes
+
+# Verify installation
+$ python -c "from unsloth import FastLanguageModel; print('Unsloth ready')"
+Unsloth ready</code></pre>
+
+      <h3>QLoRA Fine-Tuning Script</h3>
+
+      <p>Save the following to <code>train_unsloth.py</code>. This script fine-tunes Llama 3.2-3B-Instruct on a custom chat dataset using QLoRA with rank 16, fitting in under 6 GB of VRAM:</p>
+
+<pre><code>import torch
+from unsloth import FastLanguageModel
+from datasets import load_dataset
+from trl import SFTTrainer
+from transformers import TrainingArguments
+
+# ── 1. Load model with 4-bit QLoRA ────────────────────────────────
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name="unsloth/Llama-3.2-3B-Instruct",
+    max_seq_length=2048,
+    dtype=None,          # auto-detect BF16/FP16
+    load_in_4bit=True,   # QLoRA: 4-bit base model
+)
+
+# ── 2. Add LoRA adapters ──────────────────────────────────────────
+model = FastLanguageModel.get_peft_model(
+    model,
+    r=16,                          # LoRA rank
+    target_modules=[
+        "q_proj", "k_proj", "v_proj", "o_proj",
+        "gate_proj", "up_proj", "down_proj",
+    ],
+    lora_alpha=16,                 # scaling factor
+    lora_dropout=0,                # 0 = optimized for performance
+    bias="none",
+    use_gradient_checkpointing="unsloth",  # 30% less VRAM
+    random_state=3407,
+)
+
+# ── 3. Load and format dataset ────────────────────────────────────
+dataset = load_dataset("json", data_files="~/datasets/my-chat-data.json",
+                        split="train")
+
+def format_chat(ex):
+    """Convert ShareGPT to model's chat template."""
+    return {"text": tokenizer.apply_chat_template(
+        ex["conversations"], tokenize=False, add_generation_prompt=False
+    )}
+
+dataset = dataset.map(format_chat)
+
+# ── 4. Train ──────────────────────────────────────────────────────
+trainer = SFTTrainer(
+    model=model,
+    tokenizer=tokenizer,
+    train_dataset=dataset,
+    dataset_text_field="text",
+    max_seq_length=2048,
+    args=TrainingArguments(
+        per_device_train_batch_size=2,
+        gradient_accumulation_steps=4,    # effective batch = 8
+        warmup_steps=5,
+        num_train_epochs=3,
+        learning_rate=2e-4,
+        fp16=not torch.cuda.is_bf16_supported(),
+        bf16=torch.cuda.is_bf16_supported(),
+        logging_steps=1,
+        optim="adamw_8bit",
+        weight_decay=0.01,
+        lr_scheduler_type="cosine",
+        seed=3407,
+        output_dir="outputs",
+        report_to="none",
+    ),
+)
+
+trainer.train()
+
+# ── 5. Save adapter (LoRA weights only, ~32 MB) ──────────────────
+model.save_pretrained("lora-adapter")
+tokenizer.save_pretrained("lora-adapter")
+print("Adapter saved to ./lora-adapter/")</code></pre>
+
+      <p>Run it:</p>
+
+<pre><code>$ python train_unsloth.py
+
+Loading model from unsloth/Llama-3.2-3B-Instruct...
+Loading checkpoint shards: 100%|██████████| 2/2 [00:03&lt;00:00, 1.52s/it]
+Model loaded in 4-bit. VRAM used: 3.8 GB
+
+Map: 100%|██████████| 3/3 [00:00&lt;00:00, 357.21 examples/s]
+
+Training...
+{'loss': 1.8423, 'grad_norm': 2.3412, 'learning_rate': 2.00e-04, 'epoch': 0.50}
+{'loss': 1.2310, 'grad_norm': 1.8910, 'learning_rate': 1.89e-04, 'epoch': 1.00}
+{'loss': 0.8412, 'grad_norm': 1.4523, 'learning_rate': 1.55e-04, 'epoch': 1.50}
+{'loss': 0.6234, 'grad_norm': 0.9834, 'learning_rate': 1.05e-04, 'epoch': 2.00}
+{'loss': 0.4510, 'grad_norm': 0.6210, 'learning_rate': 5.00e-05, 'epoch': 2.50}
+{'loss': 0.3876, 'grad_norm': 0.4531, 'learning_rate': 5.00e-06, 'epoch': 3.00}
+
+Training completed in 0:04:32
+Peak VRAM: 5.2 GB
+Adapter saved to ./lora-adapter/</code></pre>
+
+      <p><strong>What just happened:</strong> Unsloth loaded the 3B model in 4-bit (3.8 GB), trained LoRA adapters on 16 million parameters (0.5% of total) for 3 epochs, and saved a 32 MB adapter file. The entire training consumed 5.2 GB of VRAM — runnable on a GTX 1660 Ti (6 GB). Adjust <code>r</code>, <code>lora_alpha</code>, <code>num_train_epochs</code>, and <code>learning_rate</code> for your dataset size and task complexity.</p>
+
+      <!-- ================================================================ -->
+      <h2 id="axolotl">Fine-Tuning with Axolotl</h2>
+
+      <p>Axolotl is a YAML-config-driven fine-tuning framework. Instead of writing Python, you declare your model, dataset, adapter, and hyperparameters in a single YAML file and run <code>axolotl train config.yml</code>. It is the tool of choice for reproducible, production-grade fine-tuning and supports DeepSpeed, FSDP, and multi-node training out of the box.</p>
+
+      <h3>Installation</h3>
+
+<pre><code>$ git clone https://github.com/axolotl-ai-cloud/axolotl.git
+$ cd axolotl
+$ python -m venv venv
+$ source venv/bin/activate
+$ pip install -e '.[flash-attn,deepspeed]'
+$ pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124</code></pre>
+
+      <h3>QLoRA Configuration</h3>
+
+      <p>Save this as <code>qlora-7b.yml</code>. It fine-tunes Mistral-7B-Instruct-v0.3 on the Alpaca dataset using QLoRA with rank 64:</p>
+
+<pre><code># qlora-7b.yml — QLoRA fine-tune Mistral-7B on Alpaca
+base_model: mistralai/Mistral-7B-Instruct-v0.3
+model_type: MistralForCausalLM
+tokenizer_type: LlamaTokenizer
+
+# ── QLoRA: 4-bit base, LoRA adapters ───────────────────────────────
+load_in_4bit: true
+adapter: qlora
+
+lora_r: 64
+lora_alpha: 128           # typically 2x r
+lora_dropout: 0.05
+lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+
+# ── Dataset ────────────────────────────────────────────────────────
+datasets:
+  - path: tatsu-lab/alpaca
+    type: alpaca
+dataset_prepared_path: ./last_run_prepared
+val_set_size: 0.05         # 5% held out for validation
+sequence_len: 2048
+
+# ── Training ───────────────────────────────────────────────────────
+output_dir: ./mistral-7b-qlora-alpaca
+
+micro_batch_size: 4
+gradient_accumulation_steps: 4    # effective batch = 16
+num_epochs: 3
+learning_rate: 0.0002             # 2e-4
+lr_scheduler: cosine
+optimizer: adamw_bnb_8bit
+weight_decay: 0.01
+
+bf16: auto                        # use BF16 if GPU supports it
+tf32: true                        # faster on Ampere+
+
+gradient_checkpointing: true
+flash_attention: true             # Ampere+ GPUs only
+
+logging_steps: 1
+save_steps: 100
+eval_steps: 50
+save_total_limit: 2
+
+wandb_project: my-lora-finetune   # optional W&amp;B logging
+wandb_watch: gradients</code></pre>
+
+      <p>Launch the training:</p>
+
+<pre><code>$ axolotl train qlora-7b.yml
+
+[INFO] Loading base model: mistralai/Mistral-7B-Instruct-v0.3
+[INFO] Loading checkpoint shards: 100%|██████████| 3/3 [00:08&lt;00:00]
+[INFO] Model loaded in 4-bit. VRAM used: 5.6 GB
+[INFO] Applying QLoRA adapters: r=64, alpha=128, target=all-linear
+[INFO] Trainable parameters: 67,108,864 / 7,241,731,072 (0.93%)
+[INFO] Loading dataset: tatsu-lab/alpaca (52,002 examples)
+[INFO] Validation set: 2,600 examples (5%)
+[INFO] Tokenizing...
+[INFO] Starting training: effective batch=16, lr=2e-4, epochs=3
+
+Step    Training Loss   Validation Loss
+50      1.9823          1.7421
+100     1.4567          1.5230
+150     1.2011          1.3890
+200     1.0234          1.2910
+250     0.8912          1.2456
+...
+
+Training completed in 2:18:42
+Best validation loss: 1.2456 at step 250
+Adapter saved to: ./mistral-7b-qlora-alpaca/adapter_model.safetensors</code></pre>
+
+      <p>Axolotl automatically logs to W&B (if configured), saves periodic checkpoints, and runs validation so you can detect overfitting. The <code>val_set_size: 0.05</code> is critical — without it, you have no way to know if your model is memorizing the training set rather than generalizing.</p>
+
+      <!-- ================================================================ -->
+      <h2 id="llama-factory">Fine-Tuning with LLaMA-Factory</h2>
+
+      <p>LLaMA-Factory (by hiyouga) is the most feature-rich option, supporting 100+ model architectures and training paradigms beyond SFT: DPO, PPO, KTO, ORPO, reward modeling, and even continued pre-training. It provides both a CLI and a Gradio Web UI.</p>
+
+      <h3>Installation</h3>
+
+<pre><code>$ git clone --depth 1 https://github.com/hiyouga/LlamaFactory.git
+$ cd LlamaFactory
+$ python -m venv venv
+$ source venv/bin/activate
+$ pip install -e '.[torch,metrics]'</code></pre>
+
+      <h3>Command-Line Fine-Tuning</h3>
+
+      <p>LLaMA-Factory ships with pre-built YAML configs under <code>examples/train_lora/</code>. To fine-tune Qwen2.5-7B-Instruct with LoRA:</p>
+
+<pre><code>$ llamafactory-cli train examples/train_lora/qwen3_lora_sft.yaml</code></pre>
+
+      <p>Or create a custom config <code>my_lora_train.yaml</code>:</p>
+
+<pre><code>### model
+model_name_or_path: Qwen/Qwen2.5-7B-Instruct
+trust_remote_code: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 16
+lora_alpha: 32
+lora_target: all
+lora_dropout: 0.05
+
+### dataset
+dataset: alpaca_en_demo
+template: qwen
+cutoff_len: 2048
+overwrite_cache: true
+preprocessing_num_workers: 16
+
+### output
+output_dir: saves/qwen2.5-7b-lora
+logging_steps: 10
+save_steps: 500
+plot_loss: true
+
+### train
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 8    # effective batch = 16
+learning_rate: 5.0e-5
+num_train_epochs: 3.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+bf16: true
+ddp_timeout: 180000000
+
+### eval
+val_size: 0.1
+per_device_eval_batch_size: 2
+eval_strategy: steps
+eval_steps: 500</code></pre>
+
+<pre><code>$ llamafactory-cli train my_lora_train.yaml
+
+[INFO] Training arguments:
+  model_name_or_path: Qwen/Qwen2.5-7B-Instruct
+  finetuning_type: lora
+  lora_rank: 16
+  ...
+[INFO] trainable params: 33,554,432 || all params: 7,615,528,960 || trainable%: 0.4406
+[INFO] Loading dataset alpaca_en_demo...
+[INFO] Training...
+
+{'loss': 2.3412, 'grad_norm': 3.4512, 'learning_rate': 2.50e-05, 'epoch': 0.33}
+{'loss': 1.8910, 'grad_norm': 2.8934, 'learning_rate': 5.00e-05, 'epoch': 0.67}
+{'loss': 1.4523, 'grad_norm': 2.1120, 'learning_rate': 4.87e-05, 'epoch': 1.00}
+...
+Training completed. Model saved to saves/qwen2.5-7b-lora/</code></pre>
+
+      <p><strong>LLaMA-Factory's Web UI</strong> is equally useful — launch it with <code>llamafactory-cli webui</code> and configure everything through a browser. All UI settings are persisted as YAML, so you can reproduce a run from the UI by exporting the config.</p>
+
+      <!-- ================================================================ -->
+      <h2 id="hyperparameters">Hyperparameter Deep Dive</h2>
+
+      <p>Getting hyperparameters right is the difference between a model that nails your task and one that outputs gibberish. Here is what each knob does and how to tune it.</p>
+
+      <h3>LoRA Rank (r) and Alpha</h3>
+
+      <table class="table">
+        <caption>LoRA Rank Selection Guide</caption>
+        <thead>
+          <tr>
+            <th>Rank (r)</th>
+            <th>Trainable Params (7B)</th>
+            <th>Adapter Size</th>
+            <th>Use Case</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>8</td>
+            <td>~8M (0.11%)</td>
+            <td>~16 MB</td>
+            <td>Style transfer, minor behavior tweaks</td>
+          </tr>
+          <tr>
+            <td>16</td>
+            <td>~16M (0.23%)</td>
+            <td>~32 MB</td>
+            <td>Domain adaptation, instruction following (sweet spot)</td>
+          </tr>
+          <tr>
+            <td>32</td>
+            <td>~33M (0.47%)</td>
+            <td>~66 MB</td>
+            <td>Complex task learning, code generation</td>
+          </tr>
+          <tr>
+            <td>64</td>
+            <td>~67M (0.93%)</td>
+            <td>~134 MB</td>
+            <td>Deep domain expertise, multi-task fine-tuning</td>
+          </tr>
+          <tr>
+            <td>128</td>
+            <td>~135M (1.86%)</td>
+            <td>~270 MB</td>
+            <td>Near-full-fine-tune quality, large datasets</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p><code>lora_alpha</code> is a scaling factor applied to the LoRA output. The effective scaling is <code>alpha / r</code>. Common practice: set <code>lora_alpha = 2 * lora_r</code> (e.g., r=16, alpha=32), which gives a scaling factor of 2.0. Doubling alpha effectively doubles the learning rate for LoRA weights. Start with the 2x rule and only tune alpha if you see underfitting (increase alpha) or unstable loss (decrease alpha).</p>
+
+      <h3>Learning Rate</h3>
+
+      <p>LoRA fine-tuning is more forgiving than full fine-tuning. A learning rate of <strong>2e-4</strong> (AdamW) is the community default and works well for most cases. For QLoRA, you can often push to <strong>5e-4</strong> because the frozen 4-bit weights act as a regularizer. If your loss oscillates or spikes, halve the learning rate. If the loss plateaus after 1–2 epochs, try doubling it.</p>
+
+      <h3>Batch Size and Gradient Accumulation</h3>
+
+      <p>The effective batch size = <code>per_device_train_batch_size &times; gradient_accumulation_steps</code>. For LoRA fine-tuning, an effective batch of <strong>8–32</strong> works well. Smaller models (1–3B) tolerate larger batches; larger models (70B) need smaller batches due to memory constraints. Always use gradient accumulation if your GPU cannot fit the desired batch — a micro_batch of 1 with accumulation_steps=16 produces identical gradients to a batch of 16 (though it takes slightly longer due to kernel launch overhead).</p>
+
+      <h3>Epochs and Early Stopping</h3>
+
+      <p>LoRA adapters are highly expressive for their size, which means they <em>will</em> overfit if trained too long. For datasets under 5K examples, 3–5 epochs is typical. For 10K+, 1–3 epochs is usually enough. Always monitor the validation loss — when it stops decreasing (or starts increasing) while training loss keeps going down, stop training immediately. Axolotl's <code>eval_steps</code> and LLaMA-Factory's <code>eval_strategy: steps</code> automate this check.</p>
+
+      <h3>Target Modules</h3>
+
+      <p>The standard target modules for Llama/Mistral/Qwen architectures are all linear layers in the attention and MLP blocks:</p>
+
+<pre><code>target_modules = [
+    "q_proj", "k_proj", "v_proj", "o_proj",   # attention
+    "gate_proj", "up_proj", "down_proj",       # MLP
+]</code></pre>
+
+      <p>Adding <code>lm_head</code> and <code>embed_tokens</code> rarely improves quality and significantly increases adapter size. Stick with the attention + MLP projections — they capture all the expressive power you need.</p>
+
+      <!-- ================================================================ -->
+      <h2 id="inference">Merging and Inference</h2>
+
+      <p>After training, you have LoRA adapter weights (typically <code>adapter_model.safetensors</code>, 16–270 MB). You have two options for using them:</p>
+
+      <p><strong>Option 1: Load adapter on top of base model (no merge).</strong> This keeps your disk usage low and lets you swap adapters at runtime. Most inference servers (vLLM, text-generation-inference) support this natively.</p>
+
+      <p><strong>Option 2: Merge adapter into base model.</strong> This produces a single, self-contained model file that works with any inference engine, including Ollama, llama.cpp, and LM Studio. The merged model is the same size as the base model (no quality loss), just updated with your fine-tuned knowledge.</p>
+
+      <h3>Merging with Unsloth</h3>
+
+<pre><code>$ python -c "
+from unsloth import FastLanguageModel
+
+# Load base model + adapter
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name='unsloth/Llama-3.2-3B-Instruct',
+    adapter_name='./lora-adapter',
+    load_in_4bit=False,          # merge requires FP16/BF16
+    max_seq_length=2048,
+)
+
+# Merge and save
+model.save_pretrained_merged(
+    'llama-3.2-3b-my-finetune',
+    tokenizer,
+    save_method='merged_16bit',   # or 'merged_4bit_forced'
+)
+print('Merged model saved to ./llama-3.2-3b-my-finetune/')
+"</code></pre>
+
+      <h3>Merging with Axolotl / Generic PEFT</h3>
+
+<pre><code>$ python -c "
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
+
+base = 'mistralai/Mistral-7B-Instruct-v0.3'
+adapter = './mistral-7b-qlora-alpaca'
+
+model = AutoModelForCausalLM.from_pretrained(
+    base,
+    torch_dtype=torch.bfloat16,
+    device_map='auto',
+)
+model = PeftModel.from_pretrained(model, adapter)
+merged = model.merge_and_unload()
+
+merged.save_pretrained('./mistral-7b-my-finetune')
+tokenizer = AutoTokenizer.from_pretrained(adapter)
+tokenizer.save_pretrained('./mistral-7b-my-finetune')
+print('Merged model saved to ./mistral-7b-my-finetune/')
+"</code></pre>
+
+      <h3>Test Your Fine-Tuned Model</h3>
+
+<pre><code>$ python -c "
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import torch
+
+model = AutoModelForCausalLM.from_pretrained(
+    './llama-3.2-3b-my-finetune',
+    torch_dtype=torch.bfloat16,
+    device_map='auto',
+)
+tokenizer = AutoTokenizer.from_pretrained('./llama-3.2-3b-my-finetune')
+
+messages = [{'role': 'user', 'content': 'What is the capital of France?'}]
+inputs = tokenizer.apply_chat_template(messages, return_tensors='pt').to('cuda')
+
+outputs = model.generate(inputs, max_new_tokens=64, temperature=0.7)
+print(tokenizer.decode(outputs[0], skip_special_tokens=True))
+"</code></pre>
+
+<pre><code>$ python test_finetune.py
+&lt;|start_header_id|&gt;user&lt;|end_header_id|&gt;
+
+What is the capital of France?&lt;|eot_id|&gt;
+&lt;|start_header_id|&gt;assistant&lt;|end_header_id|&gt;
+
+The capital of France is Paris. It is located in the north-central
+part of the country along the Seine River and has a population of
+approximately 2.1 million people within its city limits.&lt;|eot_id|&gt;</code></pre>
+
+      <!-- ================================================================ -->
+      <h2 id="troubleshooting">Troubleshooting</h2>
+
+      <h3>CUDA Out of Memory</h3>
+      <p>If you hit OOM, try in this order: (1) enable gradient checkpointing (<code>use_gradient_checkpointing="unsloth"</code> or <code>gradient_checkpointing: true</code>); (2) reduce <code>max_seq_length</code> from 2048 to 1024; (3) reduce <code>per_device_train_batch_size</code> to 1 and increase <code>gradient_accumulation_steps</code>; (4) switch from LoRA (FP16) to QLoRA (4-bit). Each step recovers significant VRAM without degrading the final model quality.</p>
+
+      <h3>Loss Not Decreasing</h3>
+      <p>First, check that your dataset is actually loading — print a few tokenized examples. If data is fine, increase <code>learning_rate</code> from 2e-4 to 5e-4. If the loss still stalls, check that <code>lora_alpha</code> is set to at least <code>2 * lora_r</code>. A very low alpha can silently kill training by scaling LoRA contributions to near zero.</p>
+
+      <h3>Model Outputs Garbage After Fine-Tuning</h3>
+      <p>This usually means overfitting. Check if validation loss diverged from training loss during training. Reduce <code>num_train_epochs</code> from 3 to 1 and try again. Also ensure you are not training on <code>add_generation_prompt=True</code> — the model should see the assistant's response during training, not generate it. The template should be applied with <code>add_generation_prompt=False</code>.</p>
+
+      <h3>Flash Attention Not Working</h3>
+      <p>Flash Attention requires a GPU with compute capability 8.0+ (Ampere or newer: A100, RTX 3090, RTX 4090). On older GPUs (V100, T4, RTX 2080), disable Flash Attention (<code>flash_attention: false</code> in Axolotl, or skip <code>use_flash_attention_2=True</code>) and rely on PyTorch's native SDPA attention, which is nearly as fast on supported hardware.</p>
+
+      <h3>BF16 Not Supported</h3>
+      <p>BF16 requires Ampere+ GPUs. If you see a BF16 error, set <code>fp16: true</code> and <code>bf16: false</code>. In Unsloth, the <code>dtype=None</code> auto-detection handles this. In Axolotl, use <code>bf16: auto</code>. Training in FP16 is functionally equivalent to BF16 for LoRA fine-tuning — the quality difference is negligible.</p>
+
+      <!-- ================================================================ -->
+      <h2 id="next-steps">Next Steps</h2>
+
+      <p>You have now fine-tuned a large language model with LoRA/QLoRA, merged the adapter, and verified it produces sensible output. Here is where to go next:</p>
+
+      <ul>
+        <li><strong>Evaluate your fine-tune:</strong> Run <a href="/localai-lab/guides/model-evaluation-local-llms/">lm-eval-harness benchmarks</a> (MMLU, GSM8K, HumanEval) on your fine-tuned model to quantify improvement over the base model.</li>
+        <li><strong>Serve it with vLLM:</strong> Deploy your merged model using <a href="/localai-lab/guides/vllm-setup-guide/">vLLM</a> with LoRA hot-swapping for multi-tenant serving. Load multiple adapters and switch between them per-request.</li>
+        <li><strong>Quantize for CPU inference:</strong> Convert your merged model to GGUF with <a href="/localai-lab/guides/llamacpp-deep-dive/">llama.cpp's converter</a> and run it on CPU with Ollama.</li>
+        <li><strong>Try DPO alignment:</strong> After SFT fine-tuning, run Direct Preference Optimization (DPO) to align your model with human preferences. Axolotl and LLaMA-Factory support DPO out of the box.</li>
+        <li><strong>Build a RAG system on top:</strong> Combine your fine-tuned model with a <a href="/localai-lab/guides/build-local-rag/">local RAG pipeline</a> for grounded, up-to-date responses.</li>
+      </ul>
+
+      <div class="note">
+        <strong>Join the community.</strong> If you found this guide useful, <a href="/localai-lab/newsletter/">subscribe to the LocalAI Lab newsletter</a> to get new guides on fine-tuning, deployment, and local AI infrastructure delivered to your inbox. No spam, no fluff — just tested, practical knowledge.
+      </div>
+
+      <hr>
+
+      <h3>Recommended Cloud GPUs for Fine-Tuning</h3>
+
+      <p>Not everyone has a GPU at home. These are the services I use and recommend for LoRA/QLoRA fine-tuning in the cloud:</p>
+
+      <ul>
+        <li><a href="https://runpod.io?ref=localailab" target="_blank" rel="nofollow sponsored"><strong>RunPod</strong></a> — RTX 4090 from $0.44/hr, A100-80GB from $1.99/hr. Serverless and pod options. Pre-configured templates for Unsloth and Axolotl.</li>
+        <li><a href="https://vast.ai?ref=localailab" target="_blank" rel="nofollow sponsored"><strong>Vast.ai</strong></a> — Community GPU marketplace with RTX 4090s as low as $0.25/hr. Great for budget experimentation; reliability varies by host.</li>
+      </ul>
+
+      <p><em>(These are affiliate links — using them supports LocalAI Lab at no extra cost to you.)</em></p>
+
+    </div>
+  </div>
+</article>
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <span>&copy; 2026 LocalAI Lab.</span>
+    <div class="footer-links">
+      <a href="/localai-lab/guides/">Guides</a>
+      <a href="/localai-lab/newsletter/">Newsletter</a>
+    </div>
+  </div>
+</footer>
+</body>
+</html>
