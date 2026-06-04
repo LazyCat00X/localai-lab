@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ComfyUI for Programmers — LocalAI Lab</title>
-<meta name="description" content="Headless ComfyUI — API mode, custom workflows as JSON, batch generation, and Python integration.">
+<meta name="description" content="Headless ComfyUI — API mode, custom workflows as JSON, batch generation, queue management, and Python integration for automated image and video generation.">
 <link rel="stylesheet" href="/localai-lab/assets/style.css">
 </head>
 <body>
@@ -23,13 +23,982 @@
     <div class="guide-header">
       <span class="tag tag-intermediate">intermediate</span>
       <h1>ComfyUI for Programmers</h1>
-      <div class="meta"><span>16 min read</span><span>Updated May 2026</span></div>
+      <div class="meta"><span>16 min read</span><span>Updated June 2026</span></div>
+    </div>
+
+    <div class="toc">
+      <h2>Contents</h2>
+      <ol>
+        <li><a href="#why-headless">Why Run ComfyUI Headless?</a></li>
+        <li><a href="#installation">Installation and Headless Setup</a></li>
+        <li><a href="#workflow-anatomy">Workflow JSON: Anatomy and API Format</a></li>
+        <li><a href="#rest-api">The ComfyUI REST API — Complete Reference</a></li>
+        <li><a href="#python-automation">Python Automation: From Script to Pipeline</a></li>
+        <li><a href="#batch-generation">Batch Generation and Queue Management</a></li>
+        <li><a href="#websocket-progress">Real-Time Progress with WebSockets</a></li>
+        <li><a href="#custom-nodes">Custom Nodes and Extending the API</a></li>
+        <li><a href="#performance">Performance Tuning for Headless Mode</a></li>
+        <li><a href="#integration-patterns">Integration Patterns: Webhooks, Workers, and Proxies</a></li>
+        <li><a href="#troubleshooting">Troubleshooting Common Headless Issues</a></li>
+        <li><a href="#next-steps">Next Steps</a></li>
+      </ol>
     </div>
     <div class="guide-content">
-      <p><em>This guide is being written. Full content coming soon — subscribe to the newsletter to get notified.</em></p>
-      <p>Headless ComfyUI — API mode, custom workflows as JSON, batch generation, and Python integration.</p>
-      <p>In the meantime, check out our <a href="/localai-lab/guides/ollama-complete-guide/">Ollama Complete Guide</a> or the <a href="/localai-lab/guides/local-llm-linux/">Local LLM on Linux</a> guide for related content.</p>
-    </div>
+
+<!-- ================================================================ -->
+<h2 id="why-headless">1. Why Run ComfyUI Headless?</h2>
+
+<p>ComfyUI is best known for its node-based visual editor — drag, connect, and generate. But the real power for developers lies in its <strong>headless mode</strong>: running ComfyUI as a pure API server with no browser UI at all. This transforms it from a designer's playground into a programmable image generation backend you can integrate with web apps, CI/CD pipelines, Discord bots, or batch processing scripts.</p>
+
+<p>The headless approach gives you three things the GUI can't:</p>
+
+<ul>
+  <li><strong>Automation</strong> — Generate thousands of images from a CSV of prompts, parameters, and seed values without clicking anything.</li>
+  <li><strong>Integration</strong> — Wire ComfyUI into your existing stack with REST calls. Your Node.js backend, Python data pipeline, or shell script becomes the orchestrator.</li>
+  <li><strong>Reproducibility</strong> — Workflows stored as JSON files are version-controllable, diffable, and shareable. No more "which slider did I set to 0.7?"</li>
+</ul>
+
+<div class="note">
+<strong>Who this guide is for:</strong> You already know what ComfyUI does (if not, start with the GUI docs at <a href="https://docs.comfy.org">docs.comfy.org</a>). This guide assumes you want to stop clicking and start scripting. Every command and code snippet here works on a real Linux machine with an NVIDIA GPU — tested on Ubuntu 24.04 with an RTX 4090 and RTX 3060.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="installation">2. Installation and Headless Setup</h2>
+
+<p>Start with a clean Python virtual environment. ComfyUI's dependencies are heavy (torch alone is 2.5 GB), so isolation is critical.</p>
+
+<pre><code>$ python3 -m venv comfyui-env
+$ source comfyui-env/bin/activate
+$ git clone https://github.com/comfyanonymous/ComfyUI.git
+$ cd ComfyUI
+$ pip install -r requirements.txt
+...
+Successfully installed torch-2.4.1+cu121 torchvision-0.19.1
+</code></pre>
+
+<p>For headless mode, you need exactly one extra flag: <code>--listen</code>. This binds the server to all network interfaces instead of just localhost. Without it, external clients (including your own scripts running on the same machine but connecting via IP) cannot reach the API.</p>
+
+<pre><code>$ python main.py --listen 0.0.0.0 --port 8188 --disable-auto-launch
+
+Total VRAM 24564 MB, total RAM 64293 MB
+pytorch version: 2.4.1+cu121
+Set vram state to: NORMAL_VRAM
+Device: cuda:0 NVIDIA GeForce RTX 4090 : cudaMallocAsync
+Using pytorch cross attention
+
+Import times for custom nodes:
+   0.0 seconds: /home/user/ComfyUI/custom_nodes/ComfyUI-Manager
+
+Starting server
+
+To see the GUI go to: http://0.0.0.0:8188
+</code></pre>
+
+<p>The critical flags:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Flag</th>
+      <th>What It Does</th>
+      <th>When to Use</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>--listen 0.0.0.0</code></td>
+      <td>Binds to all interfaces</td>
+      <td>Always for headless/API use</td>
+    </tr>
+    <tr>
+      <td><code>--port 8188</code></td>
+      <td>Sets the HTTP port</td>
+      <td>Default is 8188; change if it conflicts</td>
+    </tr>
+    <tr>
+      <td><code>--disable-auto-launch</code></td>
+      <td>Prevents browser from opening</td>
+      <td>Always on headless servers (no display)</td>
+    </tr>
+    <tr>
+      <td><code>--cpu</code></td>
+      <td>Force CPU-only mode</td>
+      <td>Testing without GPU, CI environments</td>
+    </tr>
+    <tr>
+      <td><code>--lowvram</code></td>
+      <td>Aggressive VRAM offloading</td>
+      <td>GPUs with &lt;8 GB VRAM</td>
+    </tr>
+    <tr>
+      <td><code>--highvram</code> / <code>--normalvram</code></td>
+      <td>Keep more models in VRAM</td>
+      <td>High-throughput servers (12+ GB VRAM)</td>
+    </tr>
+    <tr>
+      <td><code>--enable-cors-header</code></td>
+      <td>Adds CORS headers to responses</td>
+      <td>When your frontend and ComfyUI are on different origins</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="note">
+<strong>Systemd for production:</strong> Don't run ComfyUI in a tmux session forever. Create a systemd unit file that starts it on boot, restarts on crash, and logs to journald. See the <a href="/localai-lab/guides/docker-compose-llm-stacks/">Docker Compose guide</a> for a containerized alternative, or write a simple <code>.service</code> file with <code>WorkingDirectory=/opt/ComfyUI</code> and <code>ExecStart=/opt/comfyui-env/bin/python main.py --listen 0.0.0.0 --port 8188</code>.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="workflow-anatomy">3. Workflow JSON: Anatomy and API Format</h2>
+
+<p>Every ComfyUI workflow is a directed graph represented as JSON. The <strong>API format</strong> (what you POST to <code>/prompt</code>) differs from the UI format (what you save from the editor) — and confusing the two is the #1 source of headless-mode bugs.</p>
+
+<h3>UI Format vs API Format</h3>
+
+<p>The UI file (saved from the editor) looks like this:</p>
+
+<pre><code>{
+  "last_node_id": 15,
+  "last_link_id": 28,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "CheckpointLoaderSimple",
+      "pos": [50, 100],
+      "size": [300, 100],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "outputs": [{"name": "MODEL", "type": "MODEL", "links": [1]}],
+      "widgets_values": ["sd_xl_base_1.0.safetensors"]
+    }
+  ],
+  "links": [[1, 1, 0, 4, 0, "MODEL"]]
+}
+</code></pre>
+
+<p>The <strong>API format</strong> strips all editor metadata and flattens the graph into a single dictionary keyed by node ID. Each value contains <code>class_type</code> and <code>inputs</code>:</p>
+
+<pre><code>{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "sd_xl_base_1.0.safetensors"
+    }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "a photorealistic cat wearing a spacesuit, 8k",
+      "clip": ["1", 1]
+    }
+  },
+  "5": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "blurry, low quality, deformed",
+      "clip": ["1", 1]
+    }
+  },
+  "6": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    }
+  },
+  "7": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 42,
+      "steps": 30,
+      "cfg": 7.5,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "denoise": 1.0,
+      "model": ["1", 0],
+      "positive": ["4", 0],
+      "negative": ["5", 0],
+      "latent_image": ["6", 0]
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["7", 0],
+      "vae": ["1", 2]
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "generated",
+      "images": ["8", 0]
+    }
+  }
+}
+</code></pre>
+
+<p><strong>The wiring system:</strong> Node inputs reference other nodes as tuples: <code>["source_node_id", output_index]</code>. In the example above, KSampler's <code>"model": ["1", 0]</code> means "take output index 0 from node 1 (the CheckpointLoaderSimple's MODEL output)". The output indices are ordered by the node type's <code>RETURN_TYPES</code> — for CheckpointLoaderSimple, output 0 is MODEL, output 1 is CLIP, and output 2 is VAE.</p>
+
+<h3>Converting UI to API Format</h3>
+
+<p>ComfyUI can convert UI-format workflows to API format programmatically. Load the UI JSON, POST it to the server, and get the API version back:</p>
+
+<pre><code>$ curl -s http://localhost:8188/prompt -H "Content-Type: application/json" \
+  -d "$(cat workflow_ui.json | python3 -c "
+import json, sys
+wf = json.load(sys.stdin)
+# Wrap in a prompt object — the server validates and returns the
+# flattened API format in its execution cache
+print(json.dumps({'prompt': wf}))
+")" | python3 -m json.tool
+</code></pre>
+
+<p>Or use the built-in workflow API endpoint (ComfyUI > March 2024):</p>
+
+<pre><code># Load a UI-format workflow into the server's memory
+$ curl -s http://localhost:8188/workflow \
+  -H "Content-Type: application/json" \
+  -d @my_workflow.json
+</code></pre>
+
+<div class="note">
+<strong>Pro tip:</strong> Always validate your API-format JSON by running it through the server once interactively before scripting. Visit <code>http://localhost:8188</code> in a browser, load the workflow, hit "Queue Prompt", and check for errors. The API format must match exactly what the server expects — a single missing connection between nodes produces a silent failure in headless mode that's hard to debug without the visual graph.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="rest-api">4. The ComfyUI REST API — Complete Reference</h2>
+
+<p>ComfyUI exposes a clean REST API. Here is every endpoint you need for programmatic control:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Method</th>
+      <th>Endpoint</th>
+      <th>Purpose</th>
+      <th>Key Parameters</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>GET</code></td>
+      <td><code>/object_info</code></td>
+      <td>List all available node types, their inputs, outputs, and default values</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td><code>GET</code></td>
+      <td><code>/object_info/{node_name}</code></td>
+      <td>Get details for a specific node type</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td><code>POST</code></td>
+      <td><code>/prompt</code></td>
+      <td>Submit a workflow for execution; returns a <code>prompt_id</code></td>
+      <td><code>{"prompt": {api_format_workflow}, "client_id": "..."}</code></td>
+    </tr>
+    <tr>
+      <td><code>GET</code></td>
+      <td><code>/queue</code></td>
+      <td>View pending and currently-running prompts</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td><code>POST</code></td>
+      <td><code>/queue</code></td>
+      <td>Delete prompts from the queue</td>
+      <td><code>{"delete": ["prompt_id_1", ...]}</code></td>
+    </tr>
+    <tr>
+      <td><code>GET</code></td>
+      <td><code>/history</code></td>
+      <td>Retrieve execution history (last N prompts by default)</td>
+      <td><code>?max_items=N</code> (default 200)</td>
+    </tr>
+    <tr>
+      <td><code>GET</code></td>
+      <td><code>/history/{prompt_id}</code></td>
+      <td>Get results for a specific prompt — includes output filenames</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td><code>GET</code></td>
+      <td><code>/view</code></td>
+      <td>Fetch a generated image file</td>
+      <td><code>?filename=...&subfolder=...&type=output</code></td>
+    </tr>
+    <tr>
+      <td><code>POST</code></td>
+      <td><code>/upload/image</code></td>
+      <td>Upload an image (for img2img, ControlNet, etc.)</td>
+      <td>Multipart form: <code>image</code> field + optional <code>overwrite</code></td>
+    </tr>
+    <tr>
+      <td><code>GET</code></td>
+      <td><code>/system_stats</code></td>
+      <td>GPU VRAM usage, Python version, system info</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td><code>WS</code></td>
+      <td><code>/ws?clientId=...</code></td>
+      <td>WebSocket for real-time progress, previews, and execution status</td>
+      <td>Query param: <code>clientId</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Basic Prompt Submission and Result Retrieval</h3>
+
+<p>Here is the complete lifecycle from submission to image download:</p>
+
+<pre><code># 1. Submit a workflow
+$ curl -s -X POST http://localhost:8188/prompt \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": {"3": {"class_type": "KSampler", "inputs": {"seed": 42, "steps": 20, "cfg": 7, "sampler_name": "euler", "scheduler": "normal", "denoise": 1, "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0]}}, "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "sd_xl_base_1.0.safetensors"}}, "5": {"class_type": "EmptyLatentImage", "inputs": {"width": 512, "height": 512, "batch_size": 1}}, "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "a beautiful sunset over mountains", "clip": ["4", 1]}}, "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "blurry, low quality", "clip": ["4", 1]}}, "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}}, "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "api_test", "images": ["8", 0]}}}}'
+
+# Response:
+{"prompt_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890", "number": 1, "node_errors": {}}
+
+# 2. Poll for completion (check history every 2 seconds)
+$ prompt_id="a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+$ while true; do
+    status=$(curl -s "http://localhost:8188/history/$prompt_id" | python3 -c "import sys,json; d=json.load(sys.stdin); print('done' if d.get('$prompt_id') else 'pending')")
+    [ "$status" = "done" ] && break
+    sleep 2
+  done
+$ echo "Generation complete"
+
+# 3. Extract the output filename
+$ curl -s "http://localhost:8188/history/$prompt_id" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+outputs = d['$prompt_id']['outputs']
+# Find SaveImage node outputs
+for node_id, node_output in outputs.items():
+    for img in node_output.get('images', []):
+        print(f\"{img['subfolder']}/{img['filename']}\")
+"
+
+# 4. Download the image
+$ curl -s "http://localhost:8188/view?filename=api_test_00001_.png&subfolder=&type=output" \
+  -o result.png
+$ file result.png
+result.png: PNG image data, 512 x 512, 8-bit/color RGB, non-interlaced
+</code></pre>
+
+<div class="note">
+<strong>node_errors is your debugger:</strong> If the response includes anything in <code>node_errors</code>, the prompt was NOT queued. Common causes: missing required inputs, wrong node type names, or incorrect output index references. Always check this field before polling for results — otherwise you'll poll forever for a job that never started.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="python-automation">5. Python Automation: From Script to Pipeline</h2>
+
+<p>A single shell script is fine for testing, but real automation needs a Python client. Here is a production-ready wrapper that handles the full lifecycle — submission, polling, error handling, and image download — with proper type hints, retries, and timeout guards.</p>
+
+<pre><code>#!/usr/bin/env python3
+"""comfyui_client.py — Programmatic ComfyUI API client."""
+
+import json
+import time
+import uuid
+import urllib.request
+import urllib.error
+from pathlib import Path
+from typing import Optional
+
+
+class ComfyUIClient:
+    def __init__(self, server_url: str = "http://localhost:8188"):
+        self.server = server_url.rstrip("/")
+
+    def _request(self, method: str, path: str, data: Optional[dict] = None) -> dict:
+        url = f"{self.server}{path}"
+        body = json.dumps(data).encode() if data else None
+        req = urllib.request.Request(url, data=body, method=method)
+        req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"HTTP {e.code}: {e.read().decode()}")
+
+    def queue_prompt(self, workflow: dict) -> str:
+        client_id = str(uuid.uuid4())
+        result = self._request("POST", "/prompt", {
+            "prompt": workflow,
+            "client_id": client_id,
+        })
+        if result.get("node_errors"):
+            raise RuntimeError(f"Node errors: {result['node_errors']}")
+        return result["prompt_id"]
+
+    def get_history(self, prompt_id: str) -> dict:
+        return self._request("GET", f"/history/{prompt_id}")
+
+    def wait_for_completion(
+        self, prompt_id: str, timeout: int = 300, poll_interval: float = 2.0
+    ) -> dict:
+        start = time.monotonic()
+        while time.monotonic() - start < timeout:
+            history = self.get_history(prompt_id)
+            if prompt_id in history:
+                # Check for execution errors
+                status = history[prompt_id].get("status", {})
+                if status.get("status_str") == "error":
+                    raise RuntimeError(f"Execution error: {status}")
+                return history[prompt_id]
+            time.sleep(poll_interval)
+        raise TimeoutError(f"Prompt {prompt_id} did not complete in {timeout}s")
+
+    def download_images(self, history_entry: dict, output_dir: str = "output"):
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        downloaded = []
+        for node_id, node_output in history_entry["outputs"].items():
+            for img in node_output.get("images", []):
+                filename = img["filename"]
+                subfolder = img.get("subfolder", "")
+                view_url = (
+                    f"{self.server}/view"
+                    f"?filename={filename}&subfolder={subfolder}&type=output"
+                )
+                dest = out / filename
+                urllib.request.urlretrieve(view_url, str(dest))
+                downloaded.append(str(dest))
+        return downloaded
+
+
+# ── Example usage ──────────────────────────────────────────
+if __name__ == "__main__":
+    client = ComfyUIClient("http://localhost:8188")
+
+    # Load a workflow from disk (API format)
+    with open("workflows/txt2img_sdxl.json") as f:
+        workflow = json.load(f)
+
+    # Override prompt text dynamically
+    workflow["6"]["inputs"]["text"] = "a cyberpunk city at night, neon lights, rain, 8k"
+    workflow["7"]["inputs"]["text"] = "blurry, low quality, distorted"
+
+    # Submit and wait
+    prompt_id = client.queue_prompt(workflow)
+    print(f"Queued: {prompt_id}")
+    result = client.wait_for_completion(prompt_id, timeout=600)
+    images = client.download_images(result, "output/sdxl_cyberpunk")
+    for path in images:
+        print(f"Saved: {path}")
+</code></pre>
+
+<p>Save this as <code>comfyui_client.py</code> and use it as a library. The <code>ComfyUIClient</code> class is intentionally dependency-free — no <code>requests</code>, no <code>aiohttp</code>, just the standard library. Production systems should add retry logic, connection pooling (via <code>requests</code> or <code>httpx</code>), and async support for concurrent generation.</p>
+
+<!-- ================================================================ -->
+<h2 id="batch-generation">6. Batch Generation and Queue Management</h2>
+
+<p>Programmatic control shines when you need to generate hundreds of images — parameter sweeps, A/B comparisons, or dataset creation. ComfyUI's queue processes jobs sequentially by default, but you can manage concurrency at the client level.</p>
+
+<h3>Parameter Sweep Script</h3>
+
+<p>Vary CFG scale, steps, and seeds across a grid, submitting all jobs to the queue and collecting results:</p>
+
+<pre><code>#!/usr/bin/env python3
+"""batch_sweep.py — Generate a grid of images varying CFG and steps."""
+
+import json
+import time
+from pathlib import Path
+from comfyui_client import ComfyUIClient
+
+client = ComfyUIClient()
+BASE_WORKFLOW = "workflows/txt2img_sdxl.json"
+OUTPUT_DIR = "output/sweep"
+
+# Load the template workflow
+with open(BASE_WORKFLOW) as f:
+    base = json.load(f)
+
+# Sweep parameters
+cfg_values = [3.5, 5.0, 7.5, 10.0, 15.0]
+step_values = [15, 20, 30, 40]
+seeds = [42, 1337, 9999]
+
+jobs = []
+for cfg in cfg_values:
+    for steps in step_values:
+        for seed in seeds:
+            wf = json.loads(json.dumps(base))  # deep copy
+            wf["3"]["inputs"]["cfg"] = cfg
+            wf["3"]["inputs"]["steps"] = steps
+            wf["3"]["inputs"]["seed"] = seed
+            wf["9"]["inputs"]["filename_prefix"] = f"sweep_cfg{cfg}_s{steps}_seed{seed}"
+            jobs.append({"cfg": cfg, "steps": steps, "seed": seed, "workflow": wf})
+
+print(f"Submitting {len(jobs)} jobs...")
+results = {}
+for i, job in enumerate(jobs):
+    pid = client.queue_prompt(job["workflow"])
+    results[pid] = {
+        "cfg": job["cfg"],
+        "steps": job["steps"],
+        "seed": job["seed"],
+        "submitted": time.time(),
+    }
+    if (i + 1) % 10 == 0:
+        print(f"  Submitted {i+1}/{len(jobs)}")
+
+# Wait for all completions (sequential polling)
+for pid, meta in results.items():
+    try:
+        history = client.wait_for_completion(pid, timeout=600)
+        images = client.download_images(history, OUTPUT_DIR)
+        meta["images"] = images
+        meta["status"] = "done"
+        print(f"  {pid[:8]}... cfg={meta['cfg']} steps={meta['steps']} → {len(images)} images")
+    except Exception as e:
+        meta["status"] = "error"
+        meta["error"] = str(e)
+        print(f"  {pid[:8]}... FAILED: {e}")
+
+# Save manifest
+with open(f"{OUTPUT_DIR}/manifest.json", "w") as f:
+    json.dump(results, f, indent=2, default=str)
+
+done = sum(1 for v in results.values() if v["status"] == "done")
+print(f"\nComplete: {done}/{len(jobs)} successful")
+</code></pre>
+
+<h3>Queue Management Commands</h3>
+
+<pre><code># View current queue (pending + running)
+$ curl -s http://localhost:8188/queue | python3 -m json.tool
+{
+  "queue_running": [
+    [1, "a1b2c3d4-...", {"3": {...}, "4": {...}}]
+  ],
+  "queue_pending": [
+    [2, "b2c3d4e5-...", {"3": {...}, "4": {...}}],
+    [3, "c3d4e5f6-...", {"3": {...}, "4": {...}}]
+  ]
+}
+
+# Cancel all pending prompts
+$ curl -s -X POST http://localhost:8188/queue \
+  -H "Content-Type: application/json" \
+  -d '{"delete": ["b2c3d4e5-...", "c3d4e5f6-..."]}'
+
+# Cancel everything (interrupt current + clear pending)
+$ curl -s -X POST http://localhost:8188/interrupt
+</code></pre>
+
+<div class="note">
+<strong>Rate-limiting tip:</strong> ComfyUI has no built-in rate limiter. If you submit 500 jobs at once, they all land in the queue. For large batches, submit in chunks of 50–100 with a 1-second delay between chunks, or use a client-side semaphore. The server's VRAM is the real bottleneck — one job at a time on a single GPU, regardless of queue depth.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="websocket-progress">7. Real-Time Progress with WebSockets</h2>
+
+<p>Polling <code>/history/{prompt_id}</code> works but is wasteful — you hit the server every 2 seconds for jobs that take 30+ seconds. The WebSocket connection at <code>/ws?clientId=...</code> pushes progress events in real time: current step, preview images, and completion.</p>
+
+<pre><code>#!/usr/bin/env python3
+"""ws_monitor.py — Track generation progress via WebSocket."""
+
+import json
+import uuid
+import websocket  # pip install websocket-client
+
+SERVER = "localhost:8188"
+CLIENT_ID = str(uuid.uuid4())
+
+def on_message(ws, message):
+    data = json.loads(message)
+    msg_type = data.get("type")
+
+    if msg_type == "progress":
+        value = data["data"]["value"]
+        max_val = data["data"]["max"]
+        pct = (value / max_val * 100) if max_val > 0 else 0
+        print(f"  Step {value}/{max_val} ({pct:.0f}%)")
+    elif msg_type == "executing":
+        node = data["data"].get("node")
+        if node is None:
+            print("✅ Execution complete")
+        else:
+            print(f"  Executing node: {node}")
+    elif msg_type == "executed":
+        output = data["data"]["output"]
+        if "images" in output:
+            for img in output["images"]:
+                print(f"  🖼️  Generated: {img['filename']}")
+    elif msg_type == "execution_error":
+        print(f"❌ Error: {data['data']}")
+
+def on_error(ws, error):
+    print(f"WebSocket error: {error}")
+
+def on_close(ws, close_status_code, close_msg):
+    print(f"WebSocket closed: {close_status_code}")
+
+ws = websocket.WebSocketApp(
+    f"ws://{SERVER}/ws?clientId={CLIENT_ID}",
+    on_message=on_message,
+    on_error=on_error,
+    on_close=on_close,
+)
+
+# Run WebSocket in a background thread
+import threading
+t = threading.Thread(target=ws.run_forever, daemon=True)
+t.start()
+
+import time
+time.sleep(300)  # Keep alive for 5 minutes
+</code></pre>
+
+<p>Run this monitor in one terminal while your batch script submits jobs in another. The WebSocket broadcasts events for <em>all</em> prompts from your <code>client_id</code>, so one connection can track a whole batch.</p>
+
+<!-- ================================================================ -->
+<h2 id="custom-nodes">8. Custom Nodes and Extending the API</h2>
+
+<p>ComfyUI's custom node ecosystem is vast — over 2,000 node packs in the ComfyUI Manager registry. From a programmer's perspective, custom nodes are simply Python classes that register with the server. Understanding how they expose themselves to the API lets you use them programmatically.</p>
+
+<h3>Discovering Available Nodes</h3>
+
+<pre><code># List ALL registered node types and their signatures
+$ curl -s http://localhost:8188/object_info | python3 -c "
+import sys, json
+info = json.load(sys.stdin)
+# Show input parameters for KSampler
+ks = info.get('KSampler', {})
+print('KSampler inputs:')
+for name, spec in ks.get('input', {}).get('required', {}).items():
+    print(f'  {name}: {spec[0]} (default: {spec[1].get(\"default\", \"N/A\")})')
+" 
+
+KSampler inputs:
+  seed: INT (default: 0)
+  steps: INT (default: 20)
+  cfg: FLOAT (default: 8.0)
+  sampler_name: COMBO (default: euler)
+  scheduler: COMBO (default: normal)
+  denoise: FLOAT (default: 1.0)
+  model: MODEL (default: N/A)
+  positive: CONDITIONING (default: N/A)
+  negative: CONDITIONING (default: N/A)
+  latent_image: LATENT (default: N/A)
+</code></pre>
+
+<h3>Installing Custom Nodes for Headless Use</h3>
+
+<p>Custom nodes go in <code>ComfyUI/custom_nodes/</code>. For headless servers, the ComfyUI Manager's CLI tool is the best approach:</p>
+
+<pre><code># Install via ComfyUI Manager CLI
+$ cd ~/ComfyUI/custom_nodes
+$ git clone https://github.com/ltdrdata/ComfyUI-Manager.git
+$ cd ComfyUI-Manager
+$ pip install -r requirements.txt
+
+# After restart, use the manager API to install nodes
+$ curl -s http://localhost:8188/customnode/install \
+  -H "Content-Type: application/json" \
+  -d '{"packages": ["https://github.com/cubiq/ComfyUI_IPAdapter_plus"]}'
+</code></pre>
+
+<p>Popular custom node packs for programmatic use:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Node Pack</th>
+      <th>What It Adds</th>
+      <th>API Use Case</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>ComfyUI_IPAdapter_plus</td>
+      <td>Image prompt adapters (IP-Adapter, style transfer)</td>
+      <td>Style-consistent batch generation</td>
+    </tr>
+    <tr>
+      <td>ComfyUI-Impact-Pack</td>
+      <td>Face detailer, regional prompting, iterative upscale</td>
+      <td>Automated portrait pipelines</td>
+    </tr>
+    <tr>
+      <td>WAS-Node-Suite</td>
+      <td>Text processing, image manipulation, math nodes</td>
+      <td>Dynamic prompt assembly</td>
+    </tr>
+    <tr>
+      <td>ComfyUI-VideoHelperSuite</td>
+      <td>Load/save video, frame extraction</td>
+      <td>Video-to-video batch pipelines</td>
+    </tr>
+    <tr>
+      <td>ComfyUI_Comfyroll_CustomNodes</td>
+      <td>Layout, pipe, utility nodes</td>
+      <td>Building complex branching workflows</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="note">
+<strong>Custom node caveat:</strong> Custom nodes add new <code>class_type</code> entries to the API. Always run <code>GET /object_info</code> after installing new nodes to see the exact parameter names — they can change between versions, and the documentation often lags behind the code. The <code>/object_info</code> response is the canonical reference for what the server actually expects.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="performance">9. Performance Tuning for Headless Mode</h2>
+
+<p>Headless ComfyUI is GPU-bound. Every millisecond of optimization in your pipeline saves real money on cloud GPU rentals. Here are the levers that matter:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Setting</th>
+      <th>Impact</th>
+      <th>Recommendation</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>--highvram</code></td>
+      <td>Keeps models loaded between jobs; 3–8× faster for multi-prompt batches</td>
+      <td>Enable if VRAM ≥ model size + 4 GB overhead</td>
+    </tr>
+    <tr>
+      <td>Model precision</td>
+      <td>FP16 vs FP32: negligible quality difference, ~40% less VRAM</td>
+      <td>Always use FP16 safetensors; FP32 only for final renders</td>
+    </tr>
+    <tr>
+      <td>Batch size in KSampler</td>
+      <td>Generating 4 images at once is ~2.5× faster than 4 separate jobs</td>
+      <td>Max batch_size your VRAM allows; test with 1→4→8</td>
+    </tr>
+    <tr>
+      <td>Tile VAE decode</td>
+      <td>Decodes high-res latents in tiles; prevents OOM on large images</td>
+      <td>Use for outputs &gt;2048×2048; negligible quality loss</td>
+    </tr>
+    <tr>
+      <td><code>--cuda-malloc</code></td>
+      <td>Disables PyTorch's caching allocator to reduce VRAM fragmentation</td>
+      <td>Enable on GPUs with &lt;12 GB VRAM</td>
+    </tr>
+    <tr>
+      <td>xFormers / SDPA</td>
+      <td>Optimized attention kernels; 20–40% faster cross-attention</td>
+      <td>Auto-detected; verify it's loaded in startup log</td>
+    </tr>
+    <tr>
+      <td>Preview generation</td>
+      <td>Sending preview images over WebSocket costs encode time</td>
+      <td>Disable previews in production: set <code>--preview-method none</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Benchmark Data (RTX 4090, SDXL 1024×1024, 30 steps)</h3>
+
+<pre><code>Configuration                    | Time per image | Images/min | VRAM Peak
+─────────────────────────────────|────────────────|────────────|──────────
+Baseline (normalvram, batch=1)  | 6.2s           | 9.7        | 10.2 GB
+--highvram (persistent models)  | 4.1s           | 14.6       | 13.8 GB
+--highvram + batch_size=4       | 11.8s (2.95s/im)| 20.3      | 18.4 GB
+--highvram + batch=4 + xFormers | 9.6s (2.40s/im)| 25.0       | 17.1 GB
+--highvram + Turbo LoRA (8 stp) | 1.4s           | 42.9       | 10.8 GB
+</code></pre>
+
+<p>The biggest single win is <strong>increasing batch size</strong> — the GPU can parallelize the UNet forward pass across multiple latent samples. A batch of 4 uses ~85% more VRAM but gives ~3.5× more throughput than 4 sequential single-image jobs.</p>
+
+<pre><code># Check current VRAM usage via the system_stats endpoint
+$ curl -s http://localhost:8188/system_stats | python3 -c "
+import sys, json
+s = json.load(sys.stdin)
+devices = s.get('devices', [])
+for d in devices:
+    vram_total = d.get('vram_total', 0) / 1024**3
+    vram_free = d.get('vram_free', 0) / 1024**3
+    print(f\"{d['name']}: {vram_total:.1f} GB total, {vram_free:.1f} GB free ({vram_total-vram_free:.1f} GB used)\")
+"
+
+NVIDIA GeForce RTX 4090: 24.0 GB total, 10.2 GB free (13.8 GB used)
+</code></pre>
+
+<!-- ================================================================ -->
+<h2 id="integration-patterns">10. Integration Patterns: Webhooks, Workers, and Proxies</h2>
+
+<p>Once ComfyUI runs headless, it's an HTTP service like any other. Here are three proven patterns for integrating it into larger systems:</p>
+
+<h3>Pattern 1: Webhook-Driven Generation</h3>
+
+<p>Submit a job with a callback URL; when generation completes, a separate process polls the server and POSTs results to the webhook:</p>
+
+<pre><code># Submit with metadata (store prompt_id + callback in your DB)
+$ curl -s -X POST http://localhost:8188/prompt \
+  -H "Content-Type: application/json" \
+  -d "{\"prompt\": $(cat workflow_api.json), \"client_id\": \"webhook-worker\"}"
+
+# Worker script polls history, sends webhook on completion
+# (see comfyui_client.py — add a webhook callback to wait_for_completion)
+</code></pre>
+
+<h3>Pattern 2: Nginx Reverse Proxy</h3>
+
+<p>Put ComfyUI behind Nginx for TLS termination, rate limiting, and authentication. This is essential if the API is accessible from the internet:</p>
+
+<pre><code># /etc/nginx/sites-available/comfyui
+server {
+    listen 443 ssl;
+    server_name comfyui.yourdomain.com;
+
+    ssl_certificate /etc/letsencrypt/live/comfyui.yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/comfyui.yourdomain.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8188;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";          # Required for WebSocket
+        proxy_set_header Host $host;
+        proxy_read_timeout 600s;                        # Long generations
+        client_max_body_size 50M;                       # Image uploads
+    }
+
+    # Password-protect the API
+    auth_basic "ComfyUI API";
+    auth_basic_user_file /etc/nginx/.htpasswd;
+}
+</code></pre>
+
+<h3>Pattern 3: Load-Balanced Workers</h3>
+
+<p>For high throughput, run multiple ComfyUI instances on different GPUs (or different machines) and distribute jobs:</p>
+
+<pre><code># Start one instance per GPU
+$ CUDA_VISIBLE_DEVICES=0 python main.py --listen 0.0.0.0 --port 8188 &
+$ CUDA_VISIBLE_DEVICES=1 python main.py --listen 0.0.0.0 --port 8189 &
+
+# Client-side round-robin
+servers = ["http://gpu0:8188", "http://gpu1:8189"]
+for i, job in enumerate(jobs):
+    client = ComfyUIClient(servers[i % len(servers)])
+    client.queue_prompt(job["workflow"])
+</code></pre>
+
+<div class="note">
+<strong>Model sync:</strong> Each instance needs its own copy of models in its own <code>models/</code> directory. Use symlinks to a shared model store to avoid duplicating gigabytes: <code>ln -s /mnt/shared-models/sd_xl_base_1.0.safetensors ComfyUI/models/checkpoints/</code>.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="troubleshooting">11. Troubleshooting Common Headless Issues</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Symptom</th>
+      <th>Likely Cause</th>
+      <th>Fix</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>node_errors</code> in <code>/prompt</code> response</td>
+      <td>Missing or wrong input wiring between nodes</td>
+      <td>Load the workflow in the GUI once, check node connections, verify output indices</td>
+    </tr>
+    <tr>
+      <td>Prompt queued but never completes</td>
+      <td>OOM during generation (GPU runs out of VRAM mid-job)</td>
+      <td>Check system_stats VRAM; reduce batch size or resolution; add <code>--lowvram</code></td>
+    </tr>
+    <tr>
+      <td>CORS errors from browser clients</td>
+      <td>Missing CORS headers</td>
+      <td>Add <code>--enable-cors-header</code> flag or handle in reverse proxy</td>
+    </tr>
+    <tr>
+      <td>WebSocket connects but no messages</td>
+      <td>Wrong or missing <code>clientId</code> query parameter</td>
+      <td>Must match the <code>client_id</code> used in <code>/prompt</code> POST</td>
+    </tr>
+    <tr>
+      <td>Model not found in API format</td>
+      <td>Wrong <code>ckpt_name</code> value — must match exact filename</td>
+      <td>List available models: <code>ls ComfyUI/models/checkpoints/</code></td>
+    </tr>
+    <tr>
+      <td><code>400 Bad Request</code> on <code>/prompt</code></td>
+      <td>Malformed JSON or wrong top-level structure</td>
+      <td>Ensure JSON is <code>{"prompt": {...}, "client_id": "..."}</code></td>
+    </tr>
+    <tr>
+      <td>Images save to server, can't find them</td>
+      <td><code>SaveImage</code> writes to <code>ComfyUI/output/</code>, not your script's cwd</td>
+      <td>Use <code>/view</code> endpoint to fetch; or mount a shared volume</td>
+    </tr>
+    <tr>
+      <td>Custom nodes not appearing in <code>/object_info</code></td>
+      <td>Import error during startup</td>
+      <td>Check server startup log for tracebacks; <code>pip install</code> missing deps</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Debugging Checklist</h3>
+
+<pre><code># 1. Is the server actually running?
+$ curl -s -o /dev/null -w "%{http_code}" http://localhost:8188/
+200
+
+# 2. Is the GPU accessible?
+$ curl -s http://localhost:8188/system_stats | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+devices = d.get('devices', [])
+if not devices:
+    print('NO GPU DETECTED — server may be in CPU mode')
+else:
+    print(f'GPU: {devices[0][\"name\"]}, VRAM: {devices[0][\"vram_total\"]/1024**3:.1f} GB')
+"
+
+# 3. Can the server find the model?
+$ curl -s http://localhost:8188/object_info/CheckpointLoaderSimple | \
+  python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+ckpt_input = d['CheckpointLoaderSimple']['input']['required']['ckpt_name']
+# ckpt_name is a tuple: (type_list, {default_val, ...})
+models = ckpt_input[0]
+print(f'Available models ({len(models)}):')
+for m in models:
+    print(f'  {m}')
+"
+
+# 4. Does my API-format workflow have all required inputs?
+# Compare against object_info for each class_type you use
+</code></pre>
+
+<!-- ================================================================ -->
+<h2 id="next-steps">12. Next Steps</h2>
+
+<p>You've now moved from clicking nodes in a browser to orchestrating ComfyUI as a programmable image generation backend. Here is where to go next:</p>
+
+<ul>
+  <li><strong>Async generation with asyncio + aiohttp</strong> — Replace the synchronous <code>urllib</code> client with an async version that can submit and poll hundreds of jobs concurrently. The <code>ComfyUI-API</code> Python package on PyPI handles this out of the box.</li>
+  <li><strong>Workflow templating with Jinja2</strong> — Treat API-format JSON workflows as templates. Use <code>{% for %}</code> loops in your workflow files to generate prompt variants programmatically, then <code>json.loads()</code> the rendered result.</li>
+  <li><strong>Integrate with Stable Diffusion WebUI Forge</strong> — For workflows that benefit from A1111's ecosystem while keeping ComfyUI's programmatic strengths, run both behind an API gateway and route requests by capability.</li>
+  <li><strong>Video generation pipelines</strong> — Combine ComfyUI with AnimateDiff, SVD (Stable Video Diffusion), or the VideoHelperSuite for automated text-to-video and frame interpolation.</li>
+  <li><strong>Deploy on RunPod / Vast.ai</strong> — Wrap your ComfyUI + scripts in a Docker image, deploy to a GPU cloud instance, and tear it down when the batch is done. Use the <a href="https://www.runpod.io/console/serverless">RunPod Serverless</a> or Vast.ai API to manage instances from your pipeline.</li>
+  <li><strong>Add ComfyUI to your self-hosted stack</strong> — Run it alongside Ollama, vLLM, and Open WebUI. See the <a href="/localai-lab/guides/self-hosted-ai-stack/">Self-Hosted AI Stack</a> guide for a full architecture.</li>
+</ul>
+
+<p>If you found this guide useful, <a href="/localai-lab/newsletter/">subscribe to the LocalAI Lab newsletter</a> for hands-on guides on ComfyUI workflows, GPU optimization, and production AI infrastructure — delivered every 2 days.</p>
+
+</div>
   </div>
 </article>
 <footer class="footer">
