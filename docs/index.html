@@ -66,6 +66,9 @@ fetch('/localai-lab/guides/index.json')
     const grid = document.getElementById('guides-grid');
     grid.innerHTML = '';
     guides.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    const count = guides.length;
+    const countEl = document.getElementById('guide-count');
+    if (countEl) countEl.textContent = count + '+';
     guides.forEach(g => {
       const card = document.createElement('a');
       card.href = g.url;
