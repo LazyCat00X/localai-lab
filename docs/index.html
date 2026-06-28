@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LocalAI Lab — Self-Hosted AI Stack Guides</title>
+<meta name="description" content="Hands-on guides for self-hosted AI: Ollama, vLLM, ComfyUI, RAG, Open WebUI, AI Gateways, and production LLM infrastructure.">
+<link rel="stylesheet" href="/localai-lab/assets/style.css">
+</head>
+<body>
+<header class="header">
+  <div class="container header-inner">
+    <a href="/localai-lab/" class="logo">~/localai-lab</a>
+    <nav class="nav">
+      <a href="/localai-lab/guides/">Guides</a>
+      <a href="/localai-lab/tools/">Tools</a>
+      <a href="/localai-lab/newsletter/">Newsletter</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="container">
+    <h1>~/localai-lab</h1>
+    <p>Hands-on guides for the self-hosted AI stack — Ollama, vLLM, ComfyUI, RAG, Open WebUI, and production LLM infrastructure. New guide every 2 days.</p>
+    <div class="hero-stats">
+      <div class="stat">
+        <span class="stat-value" id="guide-count">15+</span>
+        <span class="stat-label">Guides</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">100%</span>
+        <span class="stat-label">Self-Hosted</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">Open</span>
+        <span class="stat-label">Source</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="container">
+  <h2 style="font-size:1.4rem;margin-bottom:8px;">Latest Guides</h2>
+  <p style="color:var(--text-muted);margin-bottom:8px;">Comprehensive guides for your self-hosted AI journey.</p>
+  <div class="guides-grid" id="guides-grid">
+    <!-- Populated by JS from index.json -->
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <span>&copy; 2026 LocalAI Lab.</span>
+    <div class="footer-links">
+      <a href="/localai-lab/guides/">Guides</a>
+      <a href="/localai-lab/newsletter/">Newsletter</a>
+      <a href="https://github.com/LazyCat00X/localai-lab">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+fetch('/localai-lab/guides/index.json')
+  .then(r => r.json())
+  .then(guides => {
+    const grid = document.getElementById('guides-grid');
+    grid.innerHTML = '';
+    guides.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    guides.forEach(g => {
+      const card = document.createElement('a');
+      card.href = g.url;
+      card.className = 'guide-card';
+      card.innerHTML = `
+        <span class="tag tag-${g.level || 'intermediate'}">${g.level || 'intermediate'}</span>
+        <h3>${g.title}</h3>
+        <p>${g.description || ''}</p>
+        <div class="guide-meta">
+          <span>${g.date || ''}</span>
+          <span>${g.readTime || ''}</span>
+        </div>
+      `;
+      grid.appendChild(card);
+    });
+  })
+  .catch(() => {
+    document.getElementById('guides-grid').innerHTML = '<p style="color:var(--text-muted)">Loading guides...</p>';
+  });
+</script>
+</body>
+</html>

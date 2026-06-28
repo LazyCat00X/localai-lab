@@ -1,0 +1,18 @@
+[
+  {
+    "url": "/localai-lab/guides/ollama-complete-guide/",
+    "title": "Ollama Complete Guide",
+    "description": "Install, configure, and optimize Ollama for local LLM inference. Covers model management, REST API, tool calling, and performance tuning.",
+    "level": "beginner",
+    "date": "June 2026",
+    "readTime": "18 min read"
+  },
+  {
+    "url": "/localai-lab/guides/open-webui-setup/",
+    "title": "Open WebUI Setup Guide",
+    "description": "Deploy Open WebUI with Docker, connect to Ollama and OpenAI-compatible backends, and customize for team use.",
+    "level": "beginner",
+    "date": "June 2026",
+    "readTime": "15 min read"
+  }
+]

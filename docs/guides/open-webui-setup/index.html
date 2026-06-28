@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Open WebUI Setup Guide — LocalAI Lab</title>
+<meta name="description" content="Complete guide to deploying Open WebUI with Docker, connecting to Ollama and OpenAI-compatible backends, and configuring RAG, voice, and authentication.">
+<link rel="stylesheet" href="/localai-lab/assets/style.css">
+</head>
+<body>
+<header class="header">
+  <div class="container header-inner">
+    <a href="/localai-lab/" class="logo">~/localai-lab</a>
+    <nav class="nav">
+      <a href="/localai-lab/guides/">Guides</a>
+      <a href="/localai-lab/tools/">Tools</a>
+      <a href="/localai-lab/newsletter/">Newsletter</a>
+    </nav>
+  </div>
+</header>
+
+<article class="guide-page">
+  <div class="container">
+    <div class="guide-header">
+      <span class="tag tag-beginner">beginner</span>
+      <h1>Open WebUI Setup Guide</h1>
+      <div class="meta"><span>15 min read</span><span>Updated June 2026</span></div>
+    </div>
+
+    <div class="toc">
+      <h2>Contents</h2>
+      <ol>
+        <li><a href="#what-is-open-webui">What Is Open WebUI?</a></li>
+        <li><a href="#docker-installation">Docker Installation</a></li>
+        <li><a href="#connecting-backends">Connecting AI Backends</a></li>
+        <li><a href="#pip-installation">pip Installation</a></li>
+        <li><a href="#rag-configuration">RAG Configuration</a></li>
+        <li><a href="#voice-video">Voice and Video Calls</a></li>
+        <li><a href="#user-management">User Management and RBAC</a></li>
+        <li><a href="#environment-variables">Key Environment Variables</a></li>
+        <li><a href="#docker-compose">Docker Compose Deployment</a></li>
+        <li><a href="#troubleshooting">Troubleshooting</a></li>
+        <li><a href="#next-steps">Next Steps</a></li>
+      </ol>
+    </div>
+
+    <div class="guide-content">
+
+<!-- ================================================================ -->
+<h2 id="what-is-open-webui">1. What Is Open WebUI?</h2>
+
+<p>Open WebUI is the most popular self-hosted AI interface platform, with <strong>143,000+ GitHub stars</strong> and over 16,800 commits. It provides a ChatGPT-like web interface that connects to any OpenAI-compatible backend — Ollama, vLLM, LiteLLM, OpenAI, Groq, Mistral, OpenRouter, and more.</p>
+
+<p>Beyond basic chat, Open WebUI supports:</p>
+<ul>
+  <li><strong>Local RAG</strong> — Upload documents and chat with them using your choice of 9 vector databases</li>
+  <li><strong>Voice/Video calls</strong> — Hands-free interaction with multiple STT/TTS providers</li>
+  <li><strong>Image generation</strong> — Built-in support for DALL-E, ComfyUI, and AUTOMATIC1111</li>
+  <li><strong>Model Builder</strong> — Create and customize Ollama models directly from the web UI</li>
+  <li><strong>RBAC</strong> — Role-based access control with LDAP/SCIM support for teams</li>
+  <li><strong>Web search</strong> — 15+ search providers for RAG-enhanced web queries</li>
+  <li><strong>Pipelines plugin system</strong> — Custom Python logic, rate limiting, monitoring, and more</li>
+</ul>
+
+<div class="note">
+<strong>Architecture:</strong> Open WebUI is built with SvelteKit (frontend) and Python FastAPI (backend). It runs as a single Docker container with optional database backends — SQLite by default, or PostgreSQL for production deployments.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="docker-installation">2. Docker Installation</h2>
+
+<h3>Quick Start (Ollama on the same host)</h3>
+<p>If Ollama is running on the same machine, the simplest deployment uses <code>--add-host</code> to allow the container to reach the host's Ollama server:</p>
+
+<pre><code>$ docker run -d -p 3000:8080 \
+    --add-host=host.docker.internal:host-gateway \
+    -v open-webui:/app/backend/data \
+    --name open-webui \
+    --restart always \
+    ghcr.io/open-webui/open-webui:main
+</code></pre>
+
+<p>Access the web interface at <strong>http://localhost:3000</strong>. The first account you create becomes the admin.</p>
+
+<h3>With Bundled Ollama (Single Container)</h3>
+<p>Open WebUI publishes a combined image with Ollama baked in:</p>
+
+<pre><code># With GPU support
+$ docker run -d -p 3000:8080 \
+    --gpus=all \
+    -v ollama:/root/.ollama \
+    -v open-webui:/app/backend/data \
+    --name open-webui \
+    --restart always \
+    ghcr.io/open-webui/open-webui:ollama
+
+# CPU only
+$ docker run -d -p 3000:8080 \
+    -v ollama:/root/.ollama \
+    -v open-webui:/app/backend/data \
+    --name open-webui \
+    --restart always \
+    ghcr.io/open-webui/open-webui:ollama
+</code></pre>
+
+<h3>With NVIDIA GPU Acceleration</h3>
+<pre><code>$ docker run -d -p 3000:8080 \
+    --gpus all \
+    --add-host=host.docker.internal:host-gateway \
+    -v open-webui:/app/backend/data \
+    --name open-webui \
+    --restart always \
+    ghcr.io/open-webui/open-webui:cuda
+</code></pre>
+
+<p>For CUDA, ensure the <a href="https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html">NVIDIA CUDA container toolkit</a> is installed on your Linux host.</p>
+
+<h3>For OpenAI API Only (No Ollama)</h3>
+<pre><code>$ docker run -d -p 3000:8080 \
+    -e OPENAI_API_KEY=sk-your-key-here \
+    -v open-webui:/app/backend/data \
+    --name open-webui \
+    --restart always \
+    ghcr.io/open-webui/open-webui:main
+</code></pre>
+
+<!-- ================================================================ -->
+<h2 id="connecting-backends">3. Connecting AI Backends</h2>
+
+<p>Open WebUI can connect to multiple backends simultaneously. Configure them in the admin panel under <strong>Admin Settings → Connections</strong>.</p>
+
+<h3>Ollama (Local)</h3>
+<p>By default, Open WebUI connects to <code>http://host.docker.internal:11434</code>. If Ollama is on a different server:</p>
+
+<pre><code>$ docker run -d -p 3000:8080 \
+    -e OLLAMA_BASE_URL="https://ollama.example.com" \
+    -v open-webui:/app/backend/data \
+    --name open-webui \
+    --restart always \
+    ghcr.io/open-webui/open-webui:main
+</code></pre>
+
+<h3>OpenAI / LiteLLM / Other Providers</h3>
+<p>In the admin panel, add an OpenAI-compatible endpoint:</p>
+<table>
+  <thead>
+    <tr><th>Provider</th><th>API URL</th><th>API Key Required</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>OpenAI</td><td><code>https://api.openai.com/v1</code></td><td>Yes</td></tr>
+    <tr><td>LiteLLM Proxy</td><td><code>http://localhost:4000/v1</code></td><td>Optional</td></tr>
+    <tr><td>GroqCloud</td><td><code>https://api.groq.com/openai/v1</code></td><td>Yes</td></tr>
+    <tr><td>Mistral AI</td><td><code>https://api.mistral.ai/v1</code></td><td>Yes</td></tr>
+    <tr><td>OpenRouter</td><td><code>https://openrouter.ai/api/v1</code></td><td>Yes</td></tr>
+    <tr><td>vLLM (local)</td><td><code>http://localhost:8000/v1</code></td><td>No</td></tr>
+  </tbody>
+</table>
+
+<h3>Multiple Model Conversations</h3>
+<p>Open WebUI supports chatting with multiple models simultaneously. Select multiple models from the dropdown — each model receives the same messages and displays its response in parallel. This is useful for comparing outputs across different providers or model sizes.</p>
+
+<!-- ================================================================ -->
+<h2 id="pip-installation">4. pip Installation (No Docker)</h2>
+
+<p>If you prefer not to use Docker, install Open WebUI directly with Python 3.11:</p>
+
+<pre><code>$ pip install open-webui
+$ open-webui serve
+</code></pre>
+
+<p>This starts the server on <strong>http://localhost:8080</strong>. All data is stored in <code>~/.open-webui/</code> by default.</p>
+
+<div class="note note-warning">
+<strong>Python version:</strong> Open WebUI requires Python 3.11 for compatibility. Using Python 3.12 or 3.13 may cause dependency conflicts with the bundled vector database libraries.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="rag-configuration">5. RAG Configuration</h2>
+
+<p>Open WebUI includes a built-in RAG engine that lets you upload documents (PDF, DOCX, TXT, Markdown, images with OCR) and chat with them using vector search.</p>
+
+<h3>Vector Database Options</h3>
+<table>
+  <thead>
+    <tr><th>Database</th><th>Type</th><th>Use Case</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>ChromaDB</td><td>Embedded (default)</td><td>Single-user, small-scale</td></tr>
+    <tr><td>PGVector</td><td>PostgreSQL extension</td><td>Production, multi-user</td></tr>
+    <tr><td>Qdrant</td><td>Standalone server</td><td>High-scale, cloud deployment</td></tr>
+    <tr><td>Milvus</td><td>Distributed</td><td>Very large document collections</td></tr>
+    <tr><td>Elasticsearch</td><td>Search engine</td><td>Enterprise, full-text + vector</td></tr>
+    <tr><td>Pinecone</td><td>Cloud-managed</td><td>Serverless, no ops overhead</td></tr>
+    <tr><td>Valkey</td><td>In-memory KV</td><td>Low-latency, caching scenarios</td></tr>
+  </tbody>
+</table>
+
+<h3>Document Loading</h3>
+<p>Upload documents directly in the chat interface or via the document library. Use the <code>#</code> command in chat to reference a document by name. Supported content extraction engines include Tika, Docling, Document Intelligence, Mistral OCR, and PaddleOCR-vl.</p>
+
+<pre><code># In chat, type:
+# report-q2-2026.pdf → What are the key findings?
+</code></pre>
+
+<h3>Web Search for RAG</h3>
+<p>Enable web search in Admin Settings to let the AI search the internet before answering. Configure any of 15+ search providers:</p>
+
+<pre><code># Admin Settings → Web Search
+Provider: SearXNG
+API URL: http://searxng:8080/search
+</code></pre>
+
+<!-- ================================================================ -->
+<h2 id="voice-video">6. Voice and Video Calls</h2>
+
+<p>Open WebUI supports real-time voice and video calls with configurable speech-to-text and text-to-speech backends:</p>
+
+<table>
+  <thead>
+    <tr><th>Component</th><th>Supported Providers</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Speech-to-Text (STT)</td><td>Whisper (local), OpenAI Whisper API, Deepgram, Azure Speech</td></tr>
+    <tr><td>Text-to-Speech (TTS)</td><td>Azure TTS, ElevenLabs, OpenAI TTS, Transformers, Web Speech API</td></tr>
+  </tbody>
+</table>
+
+<p>Configure these in <strong>Admin Settings → Audio</strong>. For local Whisper STT, the model runs inside the container and requires no API keys.</p>
+
+<!-- ================================================================ -->
+<h2 id="user-management">7. User Management and RBAC</h2>
+
+<h3>Authentication Providers</h3>
+<ul>
+  <li><strong>Local accounts</strong> — Email/password with admin approval</li>
+  <li><strong>OAuth/SSO</strong> — Google, GitHub, Microsoft, OpenID Connect, and generic OAuth</li>
+  <li><strong>LDAP/Active Directory</strong> — Enterprise integration for user sync and authentication</li>
+  <li><strong>SCIM 2.0</strong> — Automated user provisioning from Okta, Azure AD, Google Workspace</li>
+</ul>
+
+<h3>Role-Based Access Control</h3>
+<table>
+  <thead>
+    <tr><th>Role</th><th>Permissions</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>Admin</strong></td><td>Full access: manage users, models, settings, connections, RAG config</td></tr>
+    <tr><td><strong>User</strong></td><td>Chat, upload documents, use tools, create models</td></tr>
+    <tr><td><strong>Viewer</strong></td><td>Read-only access to shared conversations</td></tr>
+  </tbody>
+</table>
+
+<p>Enable LDAP in environment variables:</p>
+<pre><code>$ docker run -d -p 3000:8080 \
+    -e ENABLE_LDAP=true \
+    -e LDAP_SERVER_URL=ldap://ldap.example.com:389 \
+    -e LDAP_BASE_DN="dc=example,dc=com" \
+    -v open-webui:/app/backend/data \
+    --name open-webui \
+    --restart always \
+    ghcr.io/open-webui/open-webui:main
+</code></pre>
+
+<!-- ================================================================ -->
+<h2 id="environment-variables">8. Key Environment Variables</h2>
+
+<table>
+  <thead>
+    <tr><th>Variable</th><th>Default</th><th>Description</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>OLLAMA_BASE_URL</code></td><td><code>http://host.docker.internal:11434</code></td><td>Ollama server address</td></tr>
+    <tr><td><code>OPENAI_API_KEY</code></td><td>—</td><td>OpenAI API key (required for OpenAI backend)</td></tr>
+    <tr><td><code>WEBUI_SECRET_KEY</code></td><td>auto-generated</td><td>JWT signing secret for session tokens</td></tr>
+    <tr><td><code>WEBUI_NAME</code></td><td>Open WebUI</td><td>Custom display name for the instance</td></tr>
+    <tr><td><code>DATABASE_URL</code></td><td>sqlite://</td><td>PostgreSQL connection string for production</td></tr>
+    <tr><td><code>ENABLE_SIGNUP</code></td><td>true</td><td>Allow new user registrations</td></tr>
+    <tr><td><code>ENABLE_LDAP</code></td><td>false</td><td>Enable LDAP authentication</td></tr>
+    <tr><td><code>RAG_EMBEDDING_ENGINE</code></td><td>ollama</td><td>Embedding model for RAG</td></tr>
+    <tr><td><code>HF_HUB_OFFLINE</code></td><td>false</td><td>Set to 1 for fully offline deployments</td></tr>
+  </tbody>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="docker-compose">9. Docker Compose Deployment</h2>
+
+<p>For a production setup with PostgreSQL and Ollama:</p>
+
+<pre><code># docker-compose.yml
+services:
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    ports:
+      - "3000:8080"
+    volumes:
+      - open-webui_data:/app/backend/data
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:-change-me-in-production}
+      - ENABLE_SIGNUP=false
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
+  open-webui_data:
+</code></pre>
+
+<p>Deploy with:</p>
+<pre><code>$ docker compose up -d
+$ docker compose logs -f open-webui
+</code></pre>
+
+<div class="note">
+<strong>Production Note:</strong> Always set <code>WEBUI_SECRET_KEY</code> to a strong random value in production. Generate one with <code>openssl rand -hex 32</code>. Disable signup (<code>ENABLE_SIGNUP=false</code>) and create users manually or via SCIM/LDAP.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="troubleshooting">10. Troubleshooting</h2>
+
+<table>
+  <thead>
+    <tr><th>Symptom</th><th>Likely Cause</th><th>Fix</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>"Server Connection Error"</td><td>Container cannot reach Ollama</td><td>Use <code>--network=host</code> or <code>--add-host=host.docker.internal:host-gateway</code></td></tr>
+    <tr><td>Blank page at localhost:3000</td><td>Port conflict or container not running</td><td><code>docker logs open-webui</code> and check port availability</td></tr>
+    <tr><td>Models not showing in dropdown</td><td>Ollama URL misconfigured</td><td>Check <code>OLLAMA_BASE_URL</code> in env or admin settings</td></tr>
+    <tr><td>RAG not returning document content</td><td>Embedding model not loaded</td><td>Ensure Ollama has an embedding model: <code>ollama pull nomic-embed-text</code></td></tr>
+    <tr><td>Slow first load</td><td>Downloading models on first use</td><td>Pre-pull models: <code>ollama pull gemma4</code></td></tr>
+    <tr><td>Permission denied on volumes</td><td>Docker volume permissions</td><td>Ensure <code>docker volume inspect</code> shows correct ownership</td></tr>
+  </tbody>
+</table>
+
+<h3>Network Mode Alternative</h3>
+<p>If <code>host.docker.internal</code> doesn't work on your system (common on Linux Docker without Docker Desktop), use <code>--network=host</code>:</p>
+
+<pre><code>$ docker run -d --network=host \
+    -v open-webui:/app/backend/data \
+    -e OLLAMA_BASE_URL=http://127.0.0.1:11434 \
+    --name open-webui \
+    --restart always \
+    ghcr.io/open-webui/open-webui:main
+</code></pre>
+
+<p>Note: With <code>--network=host</code>, the port changes from 3000 to <strong>8080</strong>.</p>
+
+<h3>Updating Open WebUI</h3>
+<pre><code>$ docker pull ghcr.io/open-webui/open-webui:main
+$ docker stop open-webui
+$ docker rm open-webui
+# Re-run the docker run command from above
+</code></pre>
+
+<!-- ================================================================ -->
+<h2 id="next-steps">11. Next Steps</h2>
+
+<p>With Open WebUI running, explore these advanced configurations:</p>
+
+<ul>
+  <li><strong>Pipelines Plugin Framework</strong> — Add custom Python logic for rate limiting, content filtering, usage monitoring with Langfuse, and real-time translation</li>
+  <li><strong>Image Generation</strong> — Connect ComfyUI or AUTOMATIC1111 for in-chat image generation</li>
+  <li><strong>OpenTelemetry</strong> — Enable observability with traces, metrics, and logs for production monitoring</li>
+  <li><strong>Horizontal Scaling</strong> — Use Redis-backed sessions for multi-node deployments behind a load balancer</li>
+  <li><strong>Cloud Storage</strong> — Configure S3, Google Cloud Storage, or Azure Blob Storage for document storage</li>
+  <li><a href="/localai-lab/guides/ollama-complete-guide/">Set up Ollama</a> as the local inference backend if you haven't already</li>
+</ul>
+
+<p>If you found this guide useful, <a href="/localai-lab/newsletter/">subscribe to the LocalAI Lab newsletter</a> for hands-on guides on Open WebUI, Ollama, RAG, and production AI infrastructure — delivered every 2 days.</p>
+
+    </div>
+  </div>
+</article>
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <span>&copy; 2026 LocalAI Lab.</span>
+    <div class="footer-links">
+      <a href="/localai-lab/guides/">Guides</a>
+      <a href="/localai-lab/newsletter/">Newsletter</a>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

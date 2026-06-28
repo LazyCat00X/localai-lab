@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ollama Complete Guide — LocalAI Lab</title>
+<meta name="description" content="Comprehensive guide to installing, configuring, and optimizing Ollama for local LLM inference. Covers model management, REST API, tool calling, and GPU acceleration.">
+<link rel="stylesheet" href="/localai-lab/assets/style.css">
+</head>
+<body>
+<header class="header">
+  <div class="container header-inner">
+    <a href="/localai-lab/" class="logo">~/localai-lab</a>
+    <nav class="nav">
+      <a href="/localai-lab/guides/">Guides</a>
+      <a href="/localai-lab/tools/">Tools</a>
+      <a href="/localai-lab/newsletter/">Newsletter</a>
+    </nav>
+  </div>
+</header>
+
+<article class="guide-page">
+  <div class="container">
+    <div class="guide-header">
+      <span class="tag tag-beginner">beginner</span>
+      <h1>Ollama Complete Guide</h1>
+      <div class="meta"><span>18 min read</span><span>Updated June 2026</span></div>
+    </div>
+
+    <div class="toc">
+      <h2>Contents</h2>
+      <ol>
+        <li><a href="#what-is-ollama">What Is Ollama?</a></li>
+        <li><a href="#installation">Installation</a></li>
+        <li><a href="#model-management">Model Management</a></li>
+        <li><a href="#cli-usage">CLI Usage</a></li>
+        <li><a href="#rest-api">REST API</a></li>
+        <li><a href="#python-sdk">Python SDK</a></li>
+        <li><a href="#custom-modelfiles">Custom Modelfiles</a></li>
+        <li><a href="#advanced-features">Advanced Features</a></li>
+        <li><a href="#gguf-support">GGUF Model Support</a></li>
+        <li><a href="#performance">Performance Tuning</a></li>
+        <li><a href="#troubleshooting">Troubleshooting</a></li>
+        <li><a href="#next-steps">Next Steps</a></li>
+      </ol>
+    </div>
+
+    <div class="guide-content">
+
+<!-- ================================================================ -->
+<h2 id="what-is-ollama">1. What Is Ollama?</h2>
+
+<p>Ollama is the most popular open-source tool for running large language models locally. It wraps llama.cpp (and on Apple Silicon, MLX) behind a simple CLI and REST API, making it trivial to download, run, and interact with hundreds of models — Gemma, LLaMA, Qwen, DeepSeek, Mistral, Phi, and more — on consumer hardware.</p>
+
+<p>As of June 2026, Ollama has <strong>175,000+ GitHub stars</strong>, over 5,400 commits, and 227 releases. Version 0.30 (released June 2026) brought Vulkan GPU acceleration by default, up to 20% faster NVIDIA throughput, native GGUF file support, and a unified MLX + GGUF engine architecture.</p>
+
+<div class="note">
+<strong>Key Features:</strong> Ollama supports tool calling for coding agents (Claude Code, Codex, OpenCode, Hermes Agent), image generation (experimental, macOS), web search API, an Anthropic-compatible API mode, <code>ollama launch</code> for one-command integration setup, and intelligent model scheduling for multi-GPU systems.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="installation">2. Installation</h2>
+
+<h3>Linux (x86_64 / ARM64)</h3>
+<p>The recommended install method is a single curl pipe:</p>
+
+<pre><code>$ curl -fsSL https://ollama.com/install.sh | sh
+</code></pre>
+
+<p>This script detects your OS, installs system dependencies, and sets up Ollama as a systemd service. After installation, verify it's running:</p>
+
+<pre><code>$ systemctl --user status ollama
+● ollama.service - Ollama Service
+     Loaded: loaded
+     Active: active (running)
+
+$ ollama --version
+ollama version 0.30.11
+</code></pre>
+
+<h3>macOS (Apple Silicon)</h3>
+<p>Download the macOS app from <a href="https://ollama.com">ollama.com</a> or use Homebrew:</p>
+
+<pre><code>$ brew install ollama
+$ ollama serve
+</code></pre>
+
+<p>On Apple Silicon, Ollama now uses its <strong>MLX engine</strong> by default for optimal performance. Models output higher quality responses, respond faster, and use less memory compared to the previous llama.cpp-based engine on macOS.</p>
+
+<h3>Windows</h3>
+<pre><code>$ irm https://ollama.com/install.ps1 | iex
+</code></pre>
+
+<p>Or download the installer from ollama.com. Windows builds include Vulkan GPU acceleration out of the box.</p>
+
+<h3>Docker</h3>
+<pre><code>$ docker run -d --gpus all -v ollama:/root/.ollama -p 11434:11434 \
+    --name ollama ollama/ollama
+</code></pre>
+
+<div class="note">
+<strong>GPU Note:</strong> On Linux, the install script handles NVIDIA GPU setup automatically if it detects the CUDA toolkit and NVIDIA drivers. For AMD GPUs, ensure ROCm is installed — Ollama's Vulkan backend works with AMD, Intel, and NVIDIA hardware without vendor-specific libraries.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="model-management">3. Model Management</h2>
+
+<h3>Finding Models</h3>
+<p>Browse the full library at <a href="https://ollama.com/library">ollama.com/library</a>. Popular models include:</p>
+
+<table>
+  <thead>
+    <tr><th>Model</th><th>Parameters</th><th>Size (Q4_K_M)</th><th>GPU RAM Needed</th><th>Use Case</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>gemma4</td><td>26B</td><td>16 GB</td><td>20 GB</td><td>General chat, reasoning</td></tr>
+    <tr><td>llama3.3</td><td>70B</td><td>40 GB</td><td>48 GB</td><td>Production inference</td></tr>
+    <tr><td>qwen3-coder</td><td>30B</td><td>18 GB</td><td>24 GB</td><td>Coding, tool calling</td></tr>
+    <tr><td>deepseek-r1</td><td>70B</td><td>42 GB</td><td>48 GB</td><td>Reasoning, math</td></tr>
+    <tr><td><strong>mistral</strong></td><td>7B</td><td>4.1 GB</td><td>6 GB</td><td>General lightweight</td></tr>
+    <tr><td>phi-4</td><td>14B</td><td>8.2 GB</td><td>10 GB</td><td>Code, math</td></tr>
+    <tr><td>gpt-oss-safeguard</td><td>20B</td><td>12 GB</td><td>16 GB</td><td>Safety classification</td></tr>
+  </tbody>
+</table>
+
+<h3>Downloading and Running</h3>
+<pre><code>$ ollama pull gemma4
+pulling manifest
+pulling 4.2GB...
+pulling 8.1GB...
+verifying sha256 digest
+success
+
+$ ollama run gemma4
+>>> What are the main advantages of local LLMs over cloud APIs?
+</code></pre>
+
+<p>The first time you run a model, Ollama automatically downloads it. Subsequent runs use the cached copy.</p>
+
+<h3>Listing and Removing Models</h3>
+<pre><code>$ ollama list
+NAME              ID              SIZE      MODIFIED
+gemma4:latest     abc12345        16 GB     2 days ago
+mistral:latest    def67890        4.1 GB    5 days ago
+
+$ ollama rm mistral
+deleted 'mistral:latest'
+</code></pre>
+
+<h3>Model Tags and Quantizations</h3>
+<p>Models support multiple quantization levels via tags. The most common ones:</p>
+
+<table>
+  <thead>
+    <tr><th>Tag</th><th>Quantization</th><th>Quality / Size Tradeoff</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>:latest</code></td><td>Q4_K_M (default)</td><td>Best balance for most users</td></tr>
+    <tr><td><code>:q2_k</code></td><td>Q2_K</td><td>Smallest size, lowest quality</td></tr>
+    <tr><td><code>:q8_0</code></td><td>Q8_0</td><td>Near-full quality, larger file</td></tr>
+    <tr><td><code>:fp16</code></td><td>FP16</td><td>Full quality, largest file (~2x Q4)</td></tr>
+  </tbody>
+</table>
+
+<pre><code>$ ollama pull gemma4:q2_k  # smaller variant for limited RAM
+</code></pre>
+
+<!-- ================================================================ -->
+<h2 id="cli-usage">4. CLI Usage</h2>
+
+<h3>Interactive Chat</h3>
+<pre><code>$ ollama run gemma4
+>>> Write a Python function to reverse a linked list
+</code></pre>
+
+<h3>One-Shot Prompts</h3>
+<pre><code>$ ollama run gemma4 "Explain quantum computing in three sentences"
+Quantum computing uses qubits that can exist in multiple states...
+</code></pre>
+
+<h3>Multi-Line Mode</h3>
+<pre><code>$ ollama run gemma4
+>>> """Write a docker-compose.yml for a web app
+... with PostgreSQL and Redis"""
+</code></pre>
+
+<h3>Passing Context</h3>
+<pre><code>$ cat system_prompt.txt | ollama run gemma4 "Summarize this document"
+</code></pre>
+
+<h3>System Prompt</h3>
+<pre><code>$ ollama run gemma4 --system "You are a Linux sysadmin. Answer concisely."
+>>> How do I check disk usage?
+Use: df -h for human-readable disk usage.
+</code></pre>
+
+<!-- ================================================================ -->
+<h2 id="rest-api">5. REST API</h2>
+
+<p>Ollama exposes a REST API on <code>localhost:11434</code>. This is how applications like Open WebUI, Continue, and coding agents connect to Ollama.</p>
+
+<h3>Chat Completion</h3>
+<pre><code>$ curl http://localhost:11434/api/chat -d '{
+  "model": "gemma4",
+  "messages": [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "What is the capital of France?"}
+  ],
+  "stream": false
+}'
+</code></pre>
+
+<p>Response:</p>
+<pre><code>{
+  "model": "gemma4",
+  "message": {
+    "role": "assistant",
+    "content": "The capital of France is Paris."
+  },
+  "done": true,
+  "total_duration": 1854321000,
+  "load_duration": 102340000,
+  "tokens_evaluated": 12,
+  "tokens_per_second": 23.4
+}
+</code></pre>
+
+<h3>Generate (Simple Completion)</h3>
+<pre><code>$ curl http://localhost:11434/api/generate -d '{
+  "model": "gemma4",
+  "prompt": "Write a haiku about Linux"
+}'
+</code></pre>
+
+<h3>List Local Models</h3>
+<pre><code>$ curl http://localhost:11434/api/tags
+</code></pre>
+
+<h3>Check Model Loading Status</h3>
+<pre><code>$ curl http://localhost:11434/api/ps
+</code></pre>
+
+<h3>OpenAI-Compatible Endpoint</h3>
+<p>Ollama also serves an OpenAI-compatible endpoint at <code>/v1/</code>, making it a drop-in replacement for OpenAI in any application that supports custom endpoints:</p>
+
+<pre><code>$ curl http://localhost:11434/v1/chat/completions -d '{
+  "model": "gemma4",
+  "messages": [{"role": "user", "content": "Hello!"}]
+}'
+</code></pre>
+
+<p>Set <code>OPENAI_BASE_URL=http://localhost:11434/v1</code> and <code>OPENAI_API_KEY=ollama</code> in your application to route traffic through Ollama.</p>
+
+<!-- ================================================================ -->
+<h2 id="python-sdk">6. Python SDK</h2>
+<p>Ollama provides a first-party Python package that wraps the REST API:</p>
+
+<pre><code>$ pip install ollama
+</code></pre>
+
+<pre><code>from ollama import chat
+
+response = chat(model='gemma4', messages=[
+    {'role': 'user', 'content': 'Why is the sky blue?'},
+])
+print(response.message.content)
+</code></pre>
+
+<h3>Streaming Responses</h3>
+<pre><code>from ollama import chat
+
+stream = chat(model='gemma4', messages=[
+    {'role': 'user', 'content': 'Tell me a story'},
+], stream=True)
+
+for chunk in stream:
+    print(chunk.message.content, end='', flush=True)
+</code></pre>
+
+<h3>Tool Calling with Python</h3>
+<p>Ollama supports tool/function calling in the Python SDK:</p>
+
+<pre><code>from ollama import chat
+
+def get_weather(city: str) -> str:
+    return f"Weather in {city}: 22°C, partly cloudy"
+
+response = chat(model='gemma4', messages=[
+    {'role': 'user', 'content': 'What is the weather in Tokyo?'},
+], tools=[get_weather])
+
+print(response.message.tool_calls)
+</code></pre>
+
+<!-- ================================================================ -->
+<h2 id="custom-modelfiles">7. Custom Modelfiles</h2>
+
+<p>Modelfiles let you customize model behavior — set system prompts, adjust temperature, configure context length, and import GGUF files from Hugging Face.</p>
+
+<h3>Basic Modelfile</h3>
+<pre><code>FROM gemma4
+
+# System prompt
+SYSTEM "You are an expert Python developer. Always include code examples."
+
+# Override parameters
+PARAMETER temperature 0.3
+PARAMETER top_p 0.9
+PARAMETER num_ctx 8192
+</code></pre>
+
+<p>Create and run:</p>
+<pre><code>$ ollama create my-coder -f ./Modelfile
+$ ollama run my-coder
+</code></pre>
+
+<h3>Importing a GGUF Model from Hugging Face</h3>
+<p>As of Ollama 0.30, you can import GGUF files directly:</p>
+<pre><code># Download a GGUF file first
+$ wget https://huggingface.co/bartowski/LFM-40B-GGUF/resolve/main/LFM-40B-Q4_K_M.gguf
+
+# Create Modelfile
+$ cat > Modelfile << 'EOF'
+FROM ./LFM-40B-Q4_K_M.gguf
+PARAMETER num_ctx 4096
+EOF
+
+$ ollama create lfm-40b -f Modelfile
+$ ollama run lfm-40b
+</code></pre>
+
+<h3>Available Parameters</h3>
+<table>
+  <thead>
+    <tr><th>Parameter</th><th>Default</th><th>Description</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>temperature</code></td><td>0.7</td><td>Controls randomness. Lower = more deterministic.</td></tr>
+    <tr><td><code>top_p</code></td><td>0.9</td><td>Nucleus sampling threshold.</td></tr>
+    <tr><td><code>num_ctx</code></td><td>2048</td><td>Context window size in tokens.</td></tr>
+    <tr><td><code>repeat_penalty</code></td><td>1.1</td><td>Penalize repeated tokens.</td></tr>
+    <tr><td><code>num_predict</code></td><td>-1</td><td>Max tokens to generate (-1 = unlimited).</td></tr>
+    <tr><td><code>stop</code></td><td>[]</td><td>Stop sequences (e.g., ["\n", "User:"]).</td></tr>
+    <tr><td><code>mirostat</code></td><td>0</td><td>Mirostat sampling mode (0=off, 1=on).</td></tr>
+  </tbody>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="advanced-features">8. Advanced Features</h2>
+
+<h3>ollama launch</h3>
+<p>Introduced in January 2026, <code>ollama launch</code> sets up coding tools and AI assistants with local or cloud models in a single command:</p>
+
+<pre><code># Launch Claude Code with your local model
+$ ollama launch claude --model gemma4
+
+# Launch Hermes Agent
+$ ollama launch hermes --model gemma4
+
+# Launch OpenClaw (multi-platform AI assistant)
+$ ollama launch openclaw --model gemma4
+
+# Launch OpenAI Codex
+$ ollama launch codex --model gpt-oss:20b
+</code></pre>
+
+<p>This eliminates environment variable and config file setup — Ollama handles model discovery, API endpoint configuration, and tool integration automatically.</p>
+
+<h3>Anthropic Messages API Compatibility</h3>
+<p>Ollama now serves the Anthropic Messages API format, making it compatible with Claude Code and other Anthropic-native tools:</p>
+
+<pre><code>$ curl http://localhost:11434/anthropic/v1/messages -d '{
+  "model": "gemma4",
+  "max_tokens": 1024,
+  "messages": [{"role": "user", "content": "Hello"}]
+}'
+</code></pre>
+
+<h3>Web Search API</h3>
+<p>Ollama provides a built-in web search API (generous free tier for individuals):</p>
+
+<pre><code># Search the web through Ollama
+POST /api/search
+{
+  "query": "latest Ollama features 2026"
+}
+</code></pre>
+
+<h3>Image Generation (Experimental)</h3>
+<p>As of January 2026, Ollama can generate images locally on macOS:</p>
+
+<pre><code>POST /api/generate
+{
+  "model": "gemma4",
+  "prompt": "Generate an image of a cat wearing a space helmet"
+}
+</code></pre>
+
+<div class="note">
+<strong>Platform support:</strong> Image generation is currently experimental and macOS-only. Windows and Linux support are in development.
+</div>
+
+<h3>Model Scheduling</h3>
+<p>Ollama's intelligent scheduler (September 2025) manages memory across multiple models, reducing OOM crashes and maximizing GPU utilization:</p>
+
+<ul>
+  <li><strong>Memory-aware loading:</strong> Ollama unloads idle models when GPU memory is needed</li>
+  <li><strong>Multi-GPU scheduling:</strong> Distributes model layers across available GPUs</li>
+  <li><strong>Concurrent model serving:</strong> Multiple models can remain loaded within memory budget</li>
+</ul>
+
+<p>Check loaded models with:</p>
+<pre><code>$ ollama ps
+NAME            ID              SIZE    PROCESSOR
+gemma4:latest   abc12345        16 GB   100% GPU
+mistral:latest  def67890        4.1 GB  100% GPU
+</code></pre>
+
+<h3>Tool Calling for Coding Agents</h3>
+<p>Ollama exposes model tool-calling capabilities to connected applications. Verify tool support:</p>
+
+<pre><code>$ ollama show gemma4 | grep -i tool
+  tools: enabled
+</code></pre>
+
+<p>Coding agents like Claude Code, Codex CLI, Cline, and Continue can use Ollama models with full function-calling support — reading files, writing code, running shell commands, and browsing the web through the agent's tools.</p>
+
+<!-- ================================================================ -->
+<h2 id="gguf-support">9. GGUF Model Support</h2>
+
+<p>Ollama 0.30 brought significant improvements to GGUF model compatibility through the llama.cpp backend:</p>
+
+<ul>
+  <li><strong>20% faster NVIDIA throughput</strong> — leveraging optimizations from NVIDIA and llama.cpp teams</li>
+  <li><strong>Vulkan enabled by default</strong> — GPU acceleration on AMD, Intel, and NVIDIA without vendor-specific drivers</li>
+  <li><strong>Expanded model support</strong> — model families like LFM and Prism now work out of the box</li>
+  <li><strong>Unsloth fine-tuned models</strong> — community fine-tunes published via Unsloth are directly compatible</li>
+  <li><strong>Direct Hugging Face GGUF imports</strong> — download any .gguf file and create a model with a simple Modelfile</li>
+</ul>
+
+<pre><code># Verify GGUF model tool-calling support
+$ ollama show my-model
+  Model
+    architecture        llama
+    parameters          8.0B
+    context length      8192
+    embedding length    4096
+    tools               enabled
+
+# Use with Claude Code
+$ ollama launch claude --model my-model
+</code></pre>
+
+<!-- ================================================================ -->
+<h2 id="performance">10. Performance Tuning</h2>
+
+<h3>GPU Acceleration</h3>
+<p>Ollama automatically detects and uses your GPU. Check what backend is active:</p>
+
+<pre><code>$ ollama ps
+NAME            ID              SIZE    PROCESSOR
+gemma4:latest   abc12345        16 GB   100% GPU
+</code></pre>
+
+<p>If the processor shows "CPU", GPU acceleration isn't working. Common fixes:</p>
+
+<ul>
+  <li><strong>NVIDIA:</strong> Ensure CUDA drivers are installed (<code>nvidia-smi</code> shows your GPU)</li>
+  <li><strong>AMD:</strong> Install ROCm and ensure Vulkan drivers are present</li>
+  <li><strong>Intel:</strong> Install oneAPI or use the Vulkan backend</li>
+</ul>
+
+<h3>Environment Variables for Optimization</h3>
+<table>
+  <thead>
+    <tr><th>Variable</th><th>Purpose</th><th>Example</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>OLLAMA_NUM_PARALLEL</code></td><td>Parallel request handling</td><td><code>OLLAMA_NUM_PARALLEL=4</code></td></tr>
+    <tr><td><code>OLLAMA_MAX_LOADED_MODELS</code></td><td>Max models kept in memory</td><td><code>OLLAMA_MAX_LOADED_MODELS=2</code></td></tr>
+    <tr><td><code>OLLAMA_KEEP_ALIVE</code></td><td>How long to keep model loaded</td><td><code>OLLAMA_KEEP_ALIVE=5m</code></td></tr>
+    <tr><td><code>OLLAMA_HOST</code></td><td>Bind address</td><td><code>OLLAMA_HOST=0.0.0.0</code></td></tr>
+    <tr><td><code>OLLAMA_DEBUG</code></td><td>Enable verbose logging</td><td><code>OLLAMA_DEBUG=1</code></td></tr>
+  </tbody>
+</table>
+
+<h3>Multi-GPU Setup</h3>
+<pre><code># Distribute model across two GPUs
+$ OLLAMA_NUM_PARALLEL=2 ollama run gemma4
+</code></pre>
+
+<p>Ollama's scheduler distributes model layers across available GPUs automatically. Monitor utilization with <code>nvidia-smi</code> or <code>ollama ps</code>.</p>
+
+<h3>Context Length and Memory</h3>
+<p>Increasing context length consumes more GPU memory. A rough formula:</p>
+<pre><code>Memory ≈ model_size + (context_length × bytes_per_token)
+
+# Example: Gemma4 26B Q4 with 8192 context
+# 16 GB + (8192 × 4 bytes × 32 layers × ~0.5) ≈ 16 GB + 0.5 GB ≈ 16.5 GB
+</code></pre>
+
+<p>If you run out of memory, try a smaller quantization (<code>:q2_k</code>) or reduce <code>num_ctx</code> in your Modelfile.</p>
+
+<div class="note note-warning">
+<strong>Performance Tip:</strong> For production deployments, set <code>OLLAMA_KEEP_ALIVE=0</code> to unload models immediately after each request (saves memory at the cost of reload time), or <code>OLLAMA_KEEP_ALIVE=-1</code> to keep them permanently loaded (maximum throughput, higher memory usage).
+</div>
+
+<!-- ================================================================ -->
+<h2 id="troubleshooting">11. Troubleshooting</h2>
+
+<table>
+  <thead>
+    <tr><th>Symptom</th><th>Likely Cause</th><th>Fix</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Model runs on CPU instead of GPU</td><td>Missing GPU drivers</td><td>Run <code>nvidia-smi</code> or check Vulkan</td></tr>
+    <tr><td><code>CUDA error: out of memory</code></td><td>Model too large for GPU</td><td>Use smaller quantization or add <code>--num-ctx 2048</code></td></tr>
+    <tr><td>Slow response times</td><td>High CPU usage or swap</td><td>Monitor with <code>ollama ps</code> and <code>htop</code></td></tr>
+    <tr><td>"connection refused" to API</td><td>Ollama service not running</td><td><code>systemctl --user restart ollama</code></td></tr>
+    <tr><td>Model not found</td><td>Name mismatch or not pulled</td><td><code>ollama pull &lt;model&gt;</code></td></tr>
+    <tr><td>Tool calls not working</td><td>Model doesn't support tools</td><td>Check with <code>ollama show</code></td></tr>
+  </tbody>
+</table>
+
+<h3>Logs</h3>
+<pre><code>$ journalctl -u ollama --user -n 100 --no-pager
+$ ollama serve  # run in foreground with debug output
+</code></pre>
+
+<!-- ================================================================ -->
+<h2 id="next-steps">12. Next Steps</h2>
+
+<p>Now that you have Ollama running, here's what to explore next:</p>
+
+<ul>
+  <li><a href="/localai-lab/guides/open-webui-setup/">Open WebUI Setup</a> — A ChatGPT-like interface for your Ollama models</li>
+  <li><strong>LiteLLM Proxy</strong> — Route requests across multiple Ollama instances and cloud providers</li>
+  <li><strong>Continue.dev</strong> — AI code assistant in VS Code and JetBrains, backed by Ollama</li>
+  <li><strong>RAG pipelines</strong> — Combine Ollama with vector databases for document Q&A</li>
+  <li><strong>Ollama + OpenClaw</strong> — Personal AI assistant across WhatsApp, Telegram, Slack, and Discord</li>
+</ul>
+
+<p>If you found this guide useful, <a href="/localai-lab/newsletter/">subscribe to the LocalAI Lab newsletter</a> for hands-on guides on Ollama, vLLM, RAG, and production AI infrastructure — delivered every 2 days.</p>
+
+    </div>
+  </div>
+</article>
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <span>&copy; 2026 LocalAI Lab.</span>
+    <div class="footer-links">
+      <a href="/localai-lab/guides/">Guides</a>
+      <a href="/localai-lab/newsletter/">Newsletter</a>
+    </div>
+  </div>
+</footer>
+</body>
+</html>
