@@ -39,6 +39,7 @@
         <li><a href="#user-management">User Management and RBAC</a></li>
         <li><a href="#environment-variables">Key Environment Variables</a></li>
         <li><a href="#docker-compose">Docker Compose Deployment</a></li>
+        <li><a href="#pipelines-and-plugins">Pipelines and Plugins</a></li>
         <li><a href="#troubleshooting">Troubleshooting</a></li>
         <li><a href="#next-steps">Next Steps</a></li>
       </ol>
@@ -331,7 +332,90 @@ $ docker compose logs -f open-webui
 </div>
 
 <!-- ================================================================ -->
-<h2 id="troubleshooting">10. Troubleshooting</h2>
+<h2 id="pipelines-and-plugins">10. Pipelines Plugin Framework</h2>
+
+<p>Open WebUI's Pipelines framework lets you inject custom Python logic into the chat pipeline. This is how you add rate limiting, content filtering, usage monitoring with Langfuse, real-time language translation, and toxic message filtering — all without modifying Open WebUI's core code.</p>
+
+<h3>Setting Up Pipelines</h3>
+<p>Pipelines run as a separate service that Open WebUI connects to as an OpenAI-compatible endpoint:</p>
+
+<pre><code>$ docker run -d -p 9099:9099 \
+    -v pipelines:/app/pipelines \
+    --name pipelines \
+    --restart always \
+    ghcr.io/open-webui/pipelines:main
+</code></pre>
+
+<p>Then configure Open WebUI to use the Pipelines URL as an additional OpenAI endpoint. In the admin panel, add <code>http://pipelines:9099</code> (or <code>http://localhost:9099</code> for host-network setups) as a new OpenAI connection.</p>
+
+<h3>Example: Custom Rate Limiting Filter</h3>
+<pre><code># pipelines/rate_limit.py
+import time
+from typing import Dict
+
+class Pipeline:
+    def __init__(self):
+        self.rate_limit = 10  # requests per minute
+        self.tokens: Dict[str, list] = {}
+
+    async def on_startup(self):
+        print(f"Rate limit pipeline started: {self.rate_limit}/min")
+
+    async def on_chat(self, body: dict, user: dict) -> dict:
+        uid = user.get("id", "anonymous")
+        now = time.time()
+        window = now - 60
+        if uid not in self.tokens:
+            self.tokens[uid] = []
+        self.tokens[uid] = [t for t in self.tokens[uid] if t > window]
+        if len(self.tokens[uid]) >= self.rate_limit:
+            return {"error": "Rate limit exceeded. Try again later."}
+        self.tokens[uid].append(now)
+        return body
+</code></pre>
+
+<h3>Image Generation Integration</h3>
+<p>Open WebUI supports image generation directly in chat using multiple backends. Configure in <strong>Admin Settings → Image Generation</strong>:</p>
+
+<table>
+  <thead>
+    <tr><th>Backend</th><th>Setup</th><th>Capabilities</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>OpenAI DALL-E</td><td>Set <code>OPENAI_API_KEY</code></td><td>Text-to-image, prompt-based editing</td></tr>
+    <tr><td>ComfyUI (local)</td><td>Point to <code>http://comfyui:8188</code></td><td>Full workflow-based generation with custom nodes</td></tr>
+    <tr><td>AUTOMATIC1111 (local)</td><td>Point to <code>http://localhost:7860</code></td><td>Stable Diffusion WebUI integration</td></tr>
+  </tbody>
+</table>
+
+<p>For local ComfyUI integration, ensure ComfyUI is running with <code>--enable-cors-header</code> and accessible from the Open WebUI container:</p>
+
+<pre><code>$ docker run -d --gpus all -p 8188:8188 \
+    -v comfyui_data:/workspace \
+    --name comfyui \
+    --restart always \
+    comfy:latest
+</code></pre>
+
+<p>Then in Open WebUI, set the ComfyUI API URL to <code>http://comfyui:8188</code> (with Docker networking) or <code>http://host.docker.internal:8188</code>.</p>
+
+<h3>Observability with OpenTelemetry</h3>
+<p>For production deployments, Open WebUI supports OpenTelemetry for traces, metrics, and logs. Enable it by setting environment variables:</p>
+
+<pre><code>$ docker run -d -p 3000:8080 \
+    -e OTEL_SDK_DISABLED=false \
+    -e OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318 \
+    -e OTEL_SERVICE_NAME=open-webui \
+    -v open-webui:/app/backend/data \
+    --name open-webui \
+    --restart always \
+    ghcr.io/open-webui/open-webui:main
+</code></pre>
+
+<p>Pair this with a collector and an observability backend like Grafana Tempo or Jaeger for full request tracing. The metrics capture generation latency, token throughput, error rates, and active user sessions.</p>
+
+<!-- ================================================================ -->
+<h2 id="troubleshooting">11. Troubleshooting</h2>
 
 <table>
   <thead>
@@ -368,7 +452,7 @@ $ docker rm open-webui
 </code></pre>
 
 <!-- ================================================================ -->
-<h2 id="next-steps">11. Next Steps</h2>
+<h2 id="next-steps">12. Next Steps</h2>
 
 <p>With Open WebUI running, explore these advanced configurations:</p>
 
